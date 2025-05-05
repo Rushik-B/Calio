@@ -6,13 +6,13 @@ Below is a **lean, explicit, deliverable‑driven plan** tuned for a single deve
 
 ## Phase 0 — Project Bootstrapping *(Sprint 0)*
 
-| Deliverable                  | Definition of Done                                                                                |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- |
-| **Monorepo scaffold**        | `pnpm init` workspace with two packages: `apps/mobile` (Expo) and `apps/server` (Next.js 14).     |
-| **Dev‑tooling baseline**     | Shared `eslint`, `prettier`, `tsconfig`, `husky` pre‑commit, GitHub Actions lint workflow passes. |
-| **Secret handling skeleton** | `.env.development` + Vercel *and* Expo EAS secrets defined (dummy values).                        |
-| **Cloud anchors**            | • Vercel project created<br>• Supabase free‑tier project spun up (Postgres + Auth)                |
-| **Keys acquired**            | Google AI Studio / Vertex AI API key, GCP project + OAuth credentials created and stored in secrets.                  |
+| Deliverable                  | Definition of Done                                                                                | Status          | Notes                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------- |
+| **Monorepo scaffold**        | `pnpm init` workspace with two packages: `apps/mobile` (Expo) and `apps/server` (Next.js 14).     | ✅ Done         |                                                                  |
+| **Dev‑tooling baseline**     | Shared `eslint`, `prettier`, `tsconfig`, `husky` pre‑commit, GitHub Actions lint workflow passes. | ⚠️ Partially Done | Husky & GitHub Actions removed for now                           |
+| **Secret handling skeleton** | `.env.development` + Vercel *and* Expo EAS secrets defined (dummy values).                        | ⚠️ Partially Done | Local `.env` files created; Cloud secrets deferred             |
+| **Cloud anchors**            | • Vercel project created<br>• Supabase free‑tier project spun up (Postgres + Auth)                | ⏳ **Deferred** | Will set up Vercel/Supabase before Phase 6 deployment         |
+| **Keys acquired**            | Google AI Studio / Vertex AI API key, GCP project + OAuth credentials created and stored in secrets.                  | ⚠️ Partially Done | GCP Project + OAuth Credentials ✅; Google AI Key deferred to Phase 2 |
 
 > ⏳ **Time‑box:** 3 days. Ship when `pnpm dev` (both apps) runs with zero TypeScript errors.
 
