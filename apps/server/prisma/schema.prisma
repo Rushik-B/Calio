@@ -18,6 +18,7 @@ model User {
   id        String   @id @default(cuid())
   email     String   @unique
   name      String?
+  emailVerified DateTime? @map("email_verified")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -35,6 +36,7 @@ model Account {
   refresh_token     String? // Stored encrypted
   access_token      String? // Stored encrypted
   expires_at        Int?
+  refresh_token_expires_in Int?
   token_type        String?
   scope             String?
   id_token          String?

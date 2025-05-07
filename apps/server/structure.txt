@@ -17,8 +17,11 @@
 ├── src
 │   ├── app
 │   │   ├── api
-│   │   │   └── auth
-│   │   │       └── [...nextauth]
+│   │   │   ├── auth
+│   │   │   │   └── [...nextauth]
+│   │   │   │       └── route.ts
+│   │   │   └── calendar
+│   │   │       └── hello
 │   │   │           └── route.ts
 │   │   ├── favicon.ico
 │   │   ├── fonts
@@ -26,7 +29,8 @@
 │   │   │   └── GeistVF.woff
 │   │   ├── globals.css
 │   │   ├── layout.tsx
-│   │   └── page.tsx
+│   │   ├── page.tsx
+│   │   └── providers.tsx
 │   ├── generated
 │   │   └── prisma
 │   │       ├── client.d.ts
@@ -53,6 +57,7 @@
 │   │       ├── wasm.d.ts
 │   │       └── wasm.js
 │   ├── lib
-│   │   └── encryption.ts
+│   │   ├── encryption.ts
+│   │   └── googleCalendar.ts
 │   └── tailwind.config.ts
 └── tsconfig.json

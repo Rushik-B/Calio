@@ -1295,6 +1295,7 @@ export namespace Prisma {
     id: string | null
     email: string | null
     name: string | null
+    emailVerified: Date | null
     createdAt: Date | null
     updatedAt: Date | null
   }
@@ -1303,6 +1304,7 @@ export namespace Prisma {
     id: string | null
     email: string | null
     name: string | null
+    emailVerified: Date | null
     createdAt: Date | null
     updatedAt: Date | null
   }
@@ -1311,6 +1313,7 @@ export namespace Prisma {
     id: number
     email: number
     name: number
+    emailVerified: number
     createdAt: number
     updatedAt: number
     _all: number
@@ -1321,6 +1324,7 @@ export namespace Prisma {
     id?: true
     email?: true
     name?: true
+    emailVerified?: true
     createdAt?: true
     updatedAt?: true
   }
@@ -1329,6 +1333,7 @@ export namespace Prisma {
     id?: true
     email?: true
     name?: true
+    emailVerified?: true
     createdAt?: true
     updatedAt?: true
   }
@@ -1337,6 +1342,7 @@ export namespace Prisma {
     id?: true
     email?: true
     name?: true
+    emailVerified?: true
     createdAt?: true
     updatedAt?: true
     _all?: true
@@ -1418,6 +1424,7 @@ export namespace Prisma {
     id: string
     email: string
     name: string | null
+    emailVerified: Date | null
     createdAt: Date
     updatedAt: Date
     _count: UserCountAggregateOutputType | null
@@ -1443,6 +1450,7 @@ export namespace Prisma {
     id?: boolean
     email?: boolean
     name?: boolean
+    emailVerified?: boolean
     createdAt?: boolean
     updatedAt?: boolean
     accounts?: boolean | User$accountsArgs<ExtArgs>
@@ -1455,6 +1463,7 @@ export namespace Prisma {
     id?: boolean
     email?: boolean
     name?: boolean
+    emailVerified?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }, ExtArgs["result"]["user"]>
@@ -1463,6 +1472,7 @@ export namespace Prisma {
     id?: boolean
     email?: boolean
     name?: boolean
+    emailVerified?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }, ExtArgs["result"]["user"]>
@@ -1471,11 +1481,12 @@ export namespace Prisma {
     id?: boolean
     email?: boolean
     name?: boolean
+    emailVerified?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }
 
-  export type UserOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "email" | "name" | "createdAt" | "updatedAt", ExtArgs["result"]["user"]>
+  export type UserOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "email" | "name" | "emailVerified" | "createdAt" | "updatedAt", ExtArgs["result"]["user"]>
   export type UserInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     accounts?: boolean | User$accountsArgs<ExtArgs>
     sessions?: boolean | User$sessionsArgs<ExtArgs>
@@ -1496,6 +1507,7 @@ export namespace Prisma {
       id: string
       email: string
       name: string | null
+      emailVerified: Date | null
       createdAt: Date
       updatedAt: Date
     }, ExtArgs["result"]["user"]>
@@ -1927,6 +1939,7 @@ export namespace Prisma {
     readonly id: FieldRef<"User", 'String'>
     readonly email: FieldRef<"User", 'String'>
     readonly name: FieldRef<"User", 'String'>
+    readonly emailVerified: FieldRef<"User", 'DateTime'>
     readonly createdAt: FieldRef<"User", 'DateTime'>
     readonly updatedAt: FieldRef<"User", 'DateTime'>
   }
@@ -2421,10 +2434,12 @@ export namespace Prisma {
 
   export type AccountAvgAggregateOutputType = {
     expires_at: number | null
+    refresh_token_expires_in: number | null
   }
 
   export type AccountSumAggregateOutputType = {
     expires_at: number | null
+    refresh_token_expires_in: number | null
   }
 
   export type AccountMinAggregateOutputType = {
@@ -2436,6 +2451,7 @@ export namespace Prisma {
     refresh_token: string | null
     access_token: string | null
     expires_at: number | null
+    refresh_token_expires_in: number | null
     token_type: string | null
     scope: string | null
     id_token: string | null
@@ -2451,6 +2467,7 @@ export namespace Prisma {
     refresh_token: string | null
     access_token: string | null
     expires_at: number | null
+    refresh_token_expires_in: number | null
     token_type: string | null
     scope: string | null
     id_token: string | null
@@ -2466,6 +2483,7 @@ export namespace Prisma {
     refresh_token: number
     access_token: number
     expires_at: number
+    refresh_token_expires_in: number
     token_type: number
     scope: number
     id_token: number
@@ -2476,10 +2494,12 @@ export namespace Prisma {
 
   export type AccountAvgAggregateInputType = {
     expires_at?: true
+    refresh_token_expires_in?: true
   }
 
   export type AccountSumAggregateInputType = {
     expires_at?: true
+    refresh_token_expires_in?: true
   }
 
   export type AccountMinAggregateInputType = {
@@ -2491,6 +2511,7 @@ export namespace Prisma {
     refresh_token?: true
     access_token?: true
     expires_at?: true
+    refresh_token_expires_in?: true
     token_type?: true
     scope?: true
     id_token?: true
@@ -2506,6 +2527,7 @@ export namespace Prisma {
     refresh_token?: true
     access_token?: true
     expires_at?: true
+    refresh_token_expires_in?: true
     token_type?: true
     scope?: true
     id_token?: true
@@ -2521,6 +2543,7 @@ export namespace Prisma {
     refresh_token?: true
     access_token?: true
     expires_at?: true
+    refresh_token_expires_in?: true
     token_type?: true
     scope?: true
     id_token?: true
@@ -2623,6 +2646,7 @@ export namespace Prisma {
     refresh_token: string | null
     access_token: string | null
     expires_at: number | null
+    refresh_token_expires_in: number | null
     token_type: string | null
     scope: string | null
     id_token: string | null
@@ -2657,6 +2681,7 @@ export namespace Prisma {
     refresh_token?: boolean
     access_token?: boolean
     expires_at?: boolean
+    refresh_token_expires_in?: boolean
     token_type?: boolean
     scope?: boolean
     id_token?: boolean
@@ -2673,6 +2698,7 @@ export namespace Prisma {
     refresh_token?: boolean
     access_token?: boolean
     expires_at?: boolean
+    refresh_token_expires_in?: boolean
     token_type?: boolean
     scope?: boolean
     id_token?: boolean
@@ -2689,6 +2715,7 @@ export namespace Prisma {
     refresh_token?: boolean
     access_token?: boolean
     expires_at?: boolean
+    refresh_token_expires_in?: boolean
     token_type?: boolean
     scope?: boolean
     id_token?: boolean
@@ -2705,13 +2732,14 @@ export namespace Prisma {
     refresh_token?: boolean
     access_token?: boolean
     expires_at?: boolean
+    refresh_token_expires_in?: boolean
     token_type?: boolean
     scope?: boolean
     id_token?: boolean
     session_state?: boolean
   }
 
-  export type AccountOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "userId" | "type" | "provider" | "providerAccountId" | "refresh_token" | "access_token" | "expires_at" | "token_type" | "scope" | "id_token" | "session_state", ExtArgs["result"]["account"]>
+  export type AccountOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "userId" | "type" | "provider" | "providerAccountId" | "refresh_token" | "access_token" | "expires_at" | "refresh_token_expires_in" | "token_type" | "scope" | "id_token" | "session_state", ExtArgs["result"]["account"]>
   export type AccountInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     user?: boolean | UserDefaultArgs<ExtArgs>
   }
@@ -2736,6 +2764,7 @@ export namespace Prisma {
       refresh_token: string | null
       access_token: string | null
       expires_at: number | null
+      refresh_token_expires_in: number | null
       token_type: string | null
       scope: string | null
       id_token: string | null
@@ -3172,6 +3201,7 @@ export namespace Prisma {
     readonly refresh_token: FieldRef<"Account", 'String'>
     readonly access_token: FieldRef<"Account", 'String'>
     readonly expires_at: FieldRef<"Account", 'Int'>
+    readonly refresh_token_expires_in: FieldRef<"Account", 'Int'>
     readonly token_type: FieldRef<"Account", 'String'>
     readonly scope: FieldRef<"Account", 'String'>
     readonly id_token: FieldRef<"Account", 'String'>
@@ -6715,6 +6745,7 @@ export namespace Prisma {
     id: 'id',
     email: 'email',
     name: 'name',
+    emailVerified: 'emailVerified',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
   };
@@ -6731,6 +6762,7 @@ export namespace Prisma {
     refresh_token: 'refresh_token',
     access_token: 'access_token',
     expires_at: 'expires_at',
+    refresh_token_expires_in: 'refresh_token_expires_in',
     token_type: 'token_type',
     scope: 'scope',
     id_token: 'id_token',
@@ -6899,6 +6931,7 @@ export namespace Prisma {
     id?: StringFilter<"User"> | string
     email?: StringFilter<"User"> | string
     name?: StringNullableFilter<"User"> | string | null
+    emailVerified?: DateTimeNullableFilter<"User"> | Date | string | null
     createdAt?: DateTimeFilter<"User"> | Date | string
     updatedAt?: DateTimeFilter<"User"> | Date | string
     accounts?: AccountListRelationFilter
@@ -6910,6 +6943,7 @@ export namespace Prisma {
     id?: SortOrder
     email?: SortOrder
     name?: SortOrderInput | SortOrder
+    emailVerified?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
     accounts?: AccountOrderByRelationAggregateInput
@@ -6924,6 +6958,7 @@ export namespace Prisma {
     OR?: UserWhereInput[]
     NOT?: UserWhereInput | UserWhereInput[]
     name?: StringNullableFilter<"User"> | string | null
+    emailVerified?: DateTimeNullableFilter<"User"> | Date | string | null
     createdAt?: DateTimeFilter<"User"> | Date | string
     updatedAt?: DateTimeFilter<"User"> | Date | string
     accounts?: AccountListRelationFilter
@@ -6935,6 +6970,7 @@ export namespace Prisma {
     id?: SortOrder
     email?: SortOrder
     name?: SortOrderInput | SortOrder
+    emailVerified?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
     _count?: UserCountOrderByAggregateInput
@@ -6949,6 +6985,7 @@ export namespace Prisma {
     id?: StringWithAggregatesFilter<"User"> | string
     email?: StringWithAggregatesFilter<"User"> | string
     name?: StringNullableWithAggregatesFilter<"User"> | string | null
+    emailVerified?: DateTimeNullableWithAggregatesFilter<"User"> | Date | string | null
     createdAt?: DateTimeWithAggregatesFilter<"User"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"User"> | Date | string
   }
@@ -6965,6 +7002,7 @@ export namespace Prisma {
     refresh_token?: StringNullableFilter<"Account"> | string | null
     access_token?: StringNullableFilter<"Account"> | string | null
     expires_at?: IntNullableFilter<"Account"> | number | null
+    refresh_token_expires_in?: IntNullableFilter<"Account"> | number | null
     token_type?: StringNullableFilter<"Account"> | string | null
     scope?: StringNullableFilter<"Account"> | string | null
     id_token?: StringNullableFilter<"Account"> | string | null
@@ -6981,6 +7019,7 @@ export namespace Prisma {
     refresh_token?: SortOrderInput | SortOrder
     access_token?: SortOrderInput | SortOrder
     expires_at?: SortOrderInput | SortOrder
+    refresh_token_expires_in?: SortOrderInput | SortOrder
     token_type?: SortOrderInput | SortOrder
     scope?: SortOrderInput | SortOrder
     id_token?: SortOrderInput | SortOrder
@@ -7001,6 +7040,7 @@ export namespace Prisma {
     refresh_token?: StringNullableFilter<"Account"> | string | null
     access_token?: StringNullableFilter<"Account"> | string | null
     expires_at?: IntNullableFilter<"Account"> | number | null
+    refresh_token_expires_in?: IntNullableFilter<"Account"> | number | null
     token_type?: StringNullableFilter<"Account"> | string | null
     scope?: StringNullableFilter<"Account"> | string | null
     id_token?: StringNullableFilter<"Account"> | string | null
@@ -7017,6 +7057,7 @@ export namespace Prisma {
     refresh_token?: SortOrderInput | SortOrder
     access_token?: SortOrderInput | SortOrder
     expires_at?: SortOrderInput | SortOrder
+    refresh_token_expires_in?: SortOrderInput | SortOrder
     token_type?: SortOrderInput | SortOrder
     scope?: SortOrderInput | SortOrder
     id_token?: SortOrderInput | SortOrder
@@ -7040,6 +7081,7 @@ export namespace Prisma {
     refresh_token?: StringNullableWithAggregatesFilter<"Account"> | string | null
     access_token?: StringNullableWithAggregatesFilter<"Account"> | string | null
     expires_at?: IntNullableWithAggregatesFilter<"Account"> | number | null
+    refresh_token_expires_in?: IntNullableWithAggregatesFilter<"Account"> | number | null
     token_type?: StringNullableWithAggregatesFilter<"Account"> | string | null
     scope?: StringNullableWithAggregatesFilter<"Account"> | string | null
     id_token?: StringNullableWithAggregatesFilter<"Account"> | string | null
@@ -7213,6 +7255,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     accounts?: AccountCreateNestedManyWithoutUserInput
@@ -7224,6 +7267,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     accounts?: AccountUncheckedCreateNestedManyWithoutUserInput
@@ -7235,6 +7279,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     accounts?: AccountUpdateManyWithoutUserNestedInput
@@ -7246,6 +7291,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     accounts?: AccountUncheckedUpdateManyWithoutUserNestedInput
@@ -7257,6 +7303,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -7265,6 +7312,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -7273,6 +7321,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -7285,6 +7334,7 @@ export namespace Prisma {
     refresh_token?: string | null
     access_token?: string | null
     expires_at?: number | null
+    refresh_token_expires_in?: number | null
     token_type?: string | null
     scope?: string | null
     id_token?: string | null
@@ -7301,6 +7351,7 @@ export namespace Prisma {
     refresh_token?: string | null
     access_token?: string | null
     expires_at?: number | null
+    refresh_token_expires_in?: number | null
     token_type?: string | null
     scope?: string | null
     id_token?: string | null
@@ -7315,6 +7366,7 @@ export namespace Prisma {
     refresh_token?: NullableStringFieldUpdateOperationsInput | string | null
     access_token?: NullableStringFieldUpdateOperationsInput | string | null
     expires_at?: NullableIntFieldUpdateOperationsInput | number | null
+    refresh_token_expires_in?: NullableIntFieldUpdateOperationsInput | number | null
     token_type?: NullableStringFieldUpdateOperationsInput | string | null
     scope?: NullableStringFieldUpdateOperationsInput | string | null
     id_token?: NullableStringFieldUpdateOperationsInput | string | null
@@ -7331,6 +7383,7 @@ export namespace Prisma {
     refresh_token?: NullableStringFieldUpdateOperationsInput | string | null
     access_token?: NullableStringFieldUpdateOperationsInput | string | null
     expires_at?: NullableIntFieldUpdateOperationsInput | number | null
+    refresh_token_expires_in?: NullableIntFieldUpdateOperationsInput | number | null
     token_type?: NullableStringFieldUpdateOperationsInput | string | null
     scope?: NullableStringFieldUpdateOperationsInput | string | null
     id_token?: NullableStringFieldUpdateOperationsInput | string | null
@@ -7346,6 +7399,7 @@ export namespace Prisma {
     refresh_token?: string | null
     access_token?: string | null
     expires_at?: number | null
+    refresh_token_expires_in?: number | null
     token_type?: string | null
     scope?: string | null
     id_token?: string | null
@@ -7360,6 +7414,7 @@ export namespace Prisma {
     refresh_token?: NullableStringFieldUpdateOperationsInput | string | null
     access_token?: NullableStringFieldUpdateOperationsInput | string | null
     expires_at?: NullableIntFieldUpdateOperationsInput | number | null
+    refresh_token_expires_in?: NullableIntFieldUpdateOperationsInput | number | null
     token_type?: NullableStringFieldUpdateOperationsInput | string | null
     scope?: NullableStringFieldUpdateOperationsInput | string | null
     id_token?: NullableStringFieldUpdateOperationsInput | string | null
@@ -7375,6 +7430,7 @@ export namespace Prisma {
     refresh_token?: NullableStringFieldUpdateOperationsInput | string | null
     access_token?: NullableStringFieldUpdateOperationsInput | string | null
     expires_at?: NullableIntFieldUpdateOperationsInput | number | null
+    refresh_token_expires_in?: NullableIntFieldUpdateOperationsInput | number | null
     token_type?: NullableStringFieldUpdateOperationsInput | string | null
     scope?: NullableStringFieldUpdateOperationsInput | string | null
     id_token?: NullableStringFieldUpdateOperationsInput | string | null
@@ -7577,6 +7633,17 @@ export namespace Prisma {
     not?: NestedStringNullableFilter<$PrismaModel> | string | null
   }
 
+  export type DateTimeNullableFilter<$PrismaModel = never> = {
+    equals?: Date | string | DateTimeFieldRefInput<$PrismaModel> | null
+    in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    notIn?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    lt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    lte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    not?: NestedDateTimeNullableFilter<$PrismaModel> | Date | string | null
+  }
+
   export type DateTimeFilter<$PrismaModel = never> = {
     equals?: Date | string | DateTimeFieldRefInput<$PrismaModel>
     in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel>
@@ -7627,6 +7694,7 @@ export namespace Prisma {
     id?: SortOrder
     email?: SortOrder
     name?: SortOrder
+    emailVerified?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -7635,6 +7703,7 @@ export namespace Prisma {
     id?: SortOrder
     email?: SortOrder
     name?: SortOrder
+    emailVerified?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -7643,6 +7712,7 @@ export namespace Prisma {
     id?: SortOrder
     email?: SortOrder
     name?: SortOrder
+    emailVerified?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -7681,6 +7751,20 @@ export namespace Prisma {
     _count?: NestedIntNullableFilter<$PrismaModel>
     _min?: NestedStringNullableFilter<$PrismaModel>
     _max?: NestedStringNullableFilter<$PrismaModel>
+  }
+
+  export type DateTimeNullableWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: Date | string | DateTimeFieldRefInput<$PrismaModel> | null
+    in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    notIn?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    lt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    lte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    not?: NestedDateTimeNullableWithAggregatesFilter<$PrismaModel> | Date | string | null
+    _count?: NestedIntNullableFilter<$PrismaModel>
+    _min?: NestedDateTimeNullableFilter<$PrismaModel>
+    _max?: NestedDateTimeNullableFilter<$PrismaModel>
   }
 
   export type DateTimeWithAggregatesFilter<$PrismaModel = never> = {
@@ -7727,6 +7811,7 @@ export namespace Prisma {
     refresh_token?: SortOrder
     access_token?: SortOrder
     expires_at?: SortOrder
+    refresh_token_expires_in?: SortOrder
     token_type?: SortOrder
     scope?: SortOrder
     id_token?: SortOrder
@@ -7735,6 +7820,7 @@ export namespace Prisma {
 
   export type AccountAvgOrderByAggregateInput = {
     expires_at?: SortOrder
+    refresh_token_expires_in?: SortOrder
   }
 
   export type AccountMaxOrderByAggregateInput = {
@@ -7746,6 +7832,7 @@ export namespace Prisma {
     refresh_token?: SortOrder
     access_token?: SortOrder
     expires_at?: SortOrder
+    refresh_token_expires_in?: SortOrder
     token_type?: SortOrder
     scope?: SortOrder
     id_token?: SortOrder
@@ -7761,6 +7848,7 @@ export namespace Prisma {
     refresh_token?: SortOrder
     access_token?: SortOrder
     expires_at?: SortOrder
+    refresh_token_expires_in?: SortOrder
     token_type?: SortOrder
     scope?: SortOrder
     id_token?: SortOrder
@@ -7769,6 +7857,7 @@ export namespace Prisma {
 
   export type AccountSumOrderByAggregateInput = {
     expires_at?: SortOrder
+    refresh_token_expires_in?: SortOrder
   }
 
   export type IntNullableWithAggregatesFilter<$PrismaModel = never> = {
@@ -7961,6 +8050,10 @@ export namespace Prisma {
     set?: string | null
   }
 
+  export type NullableDateTimeFieldUpdateOperationsInput = {
+    set?: Date | string | null
+  }
+
   export type DateTimeFieldUpdateOperationsInput = {
     set?: Date | string
   }
@@ -8127,6 +8220,17 @@ export namespace Prisma {
     not?: NestedStringNullableFilter<$PrismaModel> | string | null
   }
 
+  export type NestedDateTimeNullableFilter<$PrismaModel = never> = {
+    equals?: Date | string | DateTimeFieldRefInput<$PrismaModel> | null
+    in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    notIn?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    lt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    lte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    not?: NestedDateTimeNullableFilter<$PrismaModel> | Date | string | null
+  }
+
   export type NestedDateTimeFilter<$PrismaModel = never> = {
     equals?: Date | string | DateTimeFieldRefInput<$PrismaModel>
     in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel>
@@ -8192,6 +8296,20 @@ export namespace Prisma {
     gt?: number | IntFieldRefInput<$PrismaModel>
     gte?: number | IntFieldRefInput<$PrismaModel>
     not?: NestedIntNullableFilter<$PrismaModel> | number | null
+  }
+
+  export type NestedDateTimeNullableWithAggregatesFilter<$PrismaModel = never> = {
+    equals?: Date | string | DateTimeFieldRefInput<$PrismaModel> | null
+    in?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    notIn?: Date[] | string[] | ListDateTimeFieldRefInput<$PrismaModel> | null
+    lt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    lte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gt?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    gte?: Date | string | DateTimeFieldRefInput<$PrismaModel>
+    not?: NestedDateTimeNullableWithAggregatesFilter<$PrismaModel> | Date | string | null
+    _count?: NestedIntNullableFilter<$PrismaModel>
+    _min?: NestedDateTimeNullableFilter<$PrismaModel>
+    _max?: NestedDateTimeNullableFilter<$PrismaModel>
   }
 
   export type NestedDateTimeWithAggregatesFilter<$PrismaModel = never> = {
@@ -8266,6 +8384,7 @@ export namespace Prisma {
     refresh_token?: string | null
     access_token?: string | null
     expires_at?: number | null
+    refresh_token_expires_in?: number | null
     token_type?: string | null
     scope?: string | null
     id_token?: string | null
@@ -8280,6 +8399,7 @@ export namespace Prisma {
     refresh_token?: string | null
     access_token?: string | null
     expires_at?: number | null
+    refresh_token_expires_in?: number | null
     token_type?: string | null
     scope?: string | null
     id_token?: string | null
@@ -8376,6 +8496,7 @@ export namespace Prisma {
     refresh_token?: StringNullableFilter<"Account"> | string | null
     access_token?: StringNullableFilter<"Account"> | string | null
     expires_at?: IntNullableFilter<"Account"> | number | null
+    refresh_token_expires_in?: IntNullableFilter<"Account"> | number | null
     token_type?: StringNullableFilter<"Account"> | string | null
     scope?: StringNullableFilter<"Account"> | string | null
     id_token?: StringNullableFilter<"Account"> | string | null
@@ -8442,6 +8563,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     sessions?: SessionCreateNestedManyWithoutUserInput
@@ -8452,6 +8574,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     sessions?: SessionUncheckedCreateNestedManyWithoutUserInput
@@ -8478,6 +8601,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     sessions?: SessionUpdateManyWithoutUserNestedInput
@@ -8488,6 +8612,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     sessions?: SessionUncheckedUpdateManyWithoutUserNestedInput
@@ -8498,6 +8623,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     accounts?: AccountCreateNestedManyWithoutUserInput
@@ -8508,6 +8634,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     accounts?: AccountUncheckedCreateNestedManyWithoutUserInput
@@ -8534,6 +8661,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     accounts?: AccountUpdateManyWithoutUserNestedInput
@@ -8544,6 +8672,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     accounts?: AccountUncheckedUpdateManyWithoutUserNestedInput
@@ -8554,6 +8683,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     accounts?: AccountCreateNestedManyWithoutUserInput
@@ -8564,6 +8694,7 @@ export namespace Prisma {
     id?: string
     email: string
     name?: string | null
+    emailVerified?: Date | string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     accounts?: AccountUncheckedCreateNestedManyWithoutUserInput
@@ -8590,6 +8721,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     accounts?: AccountUpdateManyWithoutUserNestedInput
@@ -8600,6 +8732,7 @@ export namespace Prisma {
     id?: StringFieldUpdateOperationsInput | string
     email?: StringFieldUpdateOperationsInput | string
     name?: NullableStringFieldUpdateOperationsInput | string | null
+    emailVerified?: NullableDateTimeFieldUpdateOperationsInput | Date | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     accounts?: AccountUncheckedUpdateManyWithoutUserNestedInput
@@ -8614,6 +8747,7 @@ export namespace Prisma {
     refresh_token?: string | null
     access_token?: string | null
     expires_at?: number | null
+    refresh_token_expires_in?: number | null
     token_type?: string | null
     scope?: string | null
     id_token?: string | null
@@ -8644,6 +8778,7 @@ export namespace Prisma {
     refresh_token?: NullableStringFieldUpdateOperationsInput | string | null
     access_token?: NullableStringFieldUpdateOperationsInput | string | null
     expires_at?: NullableIntFieldUpdateOperationsInput | number | null
+    refresh_token_expires_in?: NullableIntFieldUpdateOperationsInput | number | null
     token_type?: NullableStringFieldUpdateOperationsInput | string | null
     scope?: NullableStringFieldUpdateOperationsInput | string | null
     id_token?: NullableStringFieldUpdateOperationsInput | string | null
@@ -8658,6 +8793,7 @@ export namespace Prisma {
     refresh_token?: NullableStringFieldUpdateOperationsInput | string | null
     access_token?: NullableStringFieldUpdateOperationsInput | string | null
     expires_at?: NullableIntFieldUpdateOperationsInput | number | null
+    refresh_token_expires_in?: NullableIntFieldUpdateOperationsInput | number | null
     token_type?: NullableStringFieldUpdateOperationsInput | string | null
     scope?: NullableStringFieldUpdateOperationsInput | string | null
     id_token?: NullableStringFieldUpdateOperationsInput | string | null
@@ -8672,6 +8808,7 @@ export namespace Prisma {
     refresh_token?: NullableStringFieldUpdateOperationsInput | string | null
     access_token?: NullableStringFieldUpdateOperationsInput | string | null
     expires_at?: NullableIntFieldUpdateOperationsInput | number | null
+    refresh_token_expires_in?: NullableIntFieldUpdateOperationsInput | number | null
     token_type?: NullableStringFieldUpdateOperationsInput | string | null
     scope?: NullableStringFieldUpdateOperationsInput | string | null
     id_token?: NullableStringFieldUpdateOperationsInput | string | null

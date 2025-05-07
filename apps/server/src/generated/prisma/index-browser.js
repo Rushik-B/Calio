@@ -124,6 +124,7 @@ exports.Prisma.UserScalarFieldEnum = {
   id: 'id',
   email: 'email',
   name: 'name',
+  emailVerified: 'emailVerified',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 };
@@ -137,6 +138,7 @@ exports.Prisma.AccountScalarFieldEnum = {
   refresh_token: 'refresh_token',
   access_token: 'access_token',
   expires_at: 'expires_at',
+  refresh_token_expires_in: 'refresh_token_expires_in',
   token_type: 'token_type',
   scope: 'scope',
   id_token: 'id_token',
