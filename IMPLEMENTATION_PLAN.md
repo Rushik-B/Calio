@@ -34,7 +34,7 @@ Below is a **lean, explicit, deliverable‑driven plan** tuned for a single deve
 | Deliverable                     | DoD                                                                                                 |
 | ------------------------------- | --------------------------------------------------------------------------------------------------- |
 | **`googleCalendar.ts` wrapper** | Implements `listEvents`, `insertEvent`, `patchEvent`, `deleteEvent`, each with retry + idempotency. |
-| **Unit tests (Jest)**           | 80 %+ coverage of wrapper using **fake‑calendar** stub server.                                      |
+| **Unit tests (Jest)**           | ⏳ **Deferred** 80 %+ coverage of wrapper using **fake‑calendar** stub server.                                      |
 | **Audit logging**               | Every call writes to `AuditEvent` with `status`, `requestId`.                                       |
 
 ---
@@ -46,7 +46,7 @@ Below is a **lean, explicit, deliverable‑driven plan** tuned for a single deve
 | Deliverable               | DoD                                                                                           |
 | ------------------------- | --------------------------------------------------------------------------------------------- |
 | **LangChain agent setup** | `planner.plan(text)` returns JSON with `{action, params}` constrained by zod schema using Google Gemini via `@langchain/google-genai`.  |
-| **Two tools implemented** | `CreateEventTool`, `ListEventsTool` registered and unit‑tested with dummy controller.         |
+| **Two tools implemented** | `CreateEventTool`, `ListEventsTool` registered with dummy controller (unit tests deferred).         |
 | **Prompt v0**             | Stored in `/prompts/calendar.md`, includes 3 few‑shot examples (tuned for Gemini if needed).   |
 
 ### Sprint 4 — End‑to‑End NL → Calendar
