@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-export default function MobileRedirectLandingPage() {
+function MobileRedirectContent() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -33,5 +33,13 @@ export default function MobileRedirectLandingPage() {
         )}
       </p>
     </div>
+  );
+}
+
+export default function MobileRedirectLandingPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: '20px', fontFamily: 'sans-serif', textAlign: 'center' }}>Loading redirect information...</div>}>
+      <MobileRedirectContent />
+    </Suspense>
   );
 } 

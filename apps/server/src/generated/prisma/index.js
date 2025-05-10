@@ -198,6 +198,10 @@ const config = {
         "fromEnvVar": null,
         "value": "darwin-arm64",
         "native": true
+      },
+      {
+        "fromEnvVar": null,
+        "value": "rhel-openssl-3.0.x"
       }
     ],
     "previewFeatures": [],
@@ -215,16 +219,17 @@ const config = {
     "db"
   ],
   "activeProvider": "postgresql",
+  "postinstall": false,
   "inlineDatasources": {
     "db": {
       "url": {
         "fromEnvVar": "DATABASE_URL",
-        "value": "postgresql://postgres.dhzvypkonkwllvejamal:2D8Y7jGPWXIAOJ1%@0xE@aws-0-us-west-1.pooler.supabase.com:5432/postgres"
+        "value": null
       }
     }
   },
-  "inlineSchema": "// This is your Prisma schema file,\n// learn more about it in the docs: https://pris.ly/d/prisma-schema\n\n// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?\n// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init\n\ngenerator client {\n  provider = \"prisma-client-js\"\n  output   = \"../src/generated/prisma\"\n}\n\ndatasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\nmodel User {\n  id            String    @id @default(cuid())\n  email         String    @unique\n  name          String?\n  emailVerified DateTime? @map(\"email_verified\")\n  createdAt     DateTime  @default(now())\n  updatedAt     DateTime  @updatedAt\n\n  accounts    Account[]\n  sessions    Session[]\n  auditEvents AuditEvent[]\n}\n\nmodel Account {\n  id                       String  @id @default(cuid())\n  userId                   String\n  type                     String\n  provider                 String\n  providerAccountId        String\n  refresh_token            String? // Stored encrypted\n  access_token             String? // Stored encrypted\n  expires_at               Int?\n  refresh_token_expires_in Int?\n  token_type               String?\n  scope                    String?\n  id_token                 String?\n  session_state            String?\n\n  user User @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@unique([provider, providerAccountId])\n}\n\nmodel Session {\n  id           String   @id @default(cuid())\n  sessionToken String   @unique\n  userId       String\n  expires      DateTime\n  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)\n}\n\nmodel VerificationToken {\n  identifier String\n  token      String   @unique\n  expires    DateTime\n\n  @@unique([identifier, token])\n}\n\nmodel AuditEvent {\n  id        String   @id @default(cuid())\n  action    String // e.g., \"googleCalendar.createEvent\", \"user.login\"\n  status    String // e.g., \"success\", \"failure\", \"pending\"\n  requestId String? // Optional correlation ID\n  payload   Json? // Request/response details\n  error     String?\n  timestamp DateTime @default(now())\n\n  user   User   @relation(fields: [userId], references: [id])\n  userId String\n}\n",
-  "inlineSchemaHash": "971d2c4fbc429d87cd691f38fad64058466c414721d5e22c535de8de01dba822",
+  "inlineSchema": "// This is your Prisma schema file,\n// learn more about it in the docs: https://pris.ly/d/prisma-schema\n\n// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?\n// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init\n\ngenerator client {\n  provider      = \"prisma-client-js\"\n  output        = \"../src/generated/prisma\"\n  binaryTargets = [\"native\", \"rhel-openssl-3.0.x\"]\n}\n\ndatasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\nmodel User {\n  id            String    @id @default(cuid())\n  email         String    @unique\n  name          String?\n  emailVerified DateTime? @map(\"email_verified\")\n  createdAt     DateTime  @default(now())\n  updatedAt     DateTime  @updatedAt\n\n  accounts    Account[]\n  sessions    Session[]\n  auditEvents AuditEvent[]\n}\n\nmodel Account {\n  id                       String  @id @default(cuid())\n  userId                   String\n  type                     String\n  provider                 String\n  providerAccountId        String\n  refresh_token            String? // Stored encrypted\n  access_token             String? // Stored encrypted\n  expires_at               Int?\n  refresh_token_expires_in Int?\n  token_type               String?\n  scope                    String?\n  id_token                 String?\n  session_state            String?\n\n  user User @relation(fields: [userId], references: [id], onDelete: Cascade)\n\n  @@unique([provider, providerAccountId])\n}\n\nmodel Session {\n  id           String   @id @default(cuid())\n  sessionToken String   @unique\n  userId       String\n  expires      DateTime\n  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)\n}\n\nmodel VerificationToken {\n  identifier String\n  token      String   @unique\n  expires    DateTime\n\n  @@unique([identifier, token])\n}\n\nmodel AuditEvent {\n  id        String   @id @default(cuid())\n  action    String // e.g., \"googleCalendar.createEvent\", \"user.login\"\n  status    String // e.g., \"success\", \"failure\", \"pending\"\n  requestId String? // Optional correlation ID\n  payload   Json? // Request/response details\n  error     String?\n  timestamp DateTime @default(now())\n\n  user   User   @relation(fields: [userId], references: [id])\n  userId String\n}\n",
+  "inlineSchemaHash": "b798f3bbe04adcc5fabfd311974b11627f3e895735af370048e953f51c1e5e52",
   "copyEngine": true
 }
 
@@ -265,6 +270,10 @@ Object.assign(exports, Prisma)
 // file annotations for bundling tools to include these files
 path.join(__dirname, "libquery_engine-darwin-arm64.dylib.node");
 path.join(process.cwd(), "src/generated/prisma/libquery_engine-darwin-arm64.dylib.node")
+
+// file annotations for bundling tools to include these files
+path.join(__dirname, "libquery_engine-rhel-openssl-3.0.x.so.node");
+path.join(process.cwd(), "src/generated/prisma/libquery_engine-rhel-openssl-3.0.x.so.node")
 // file annotations for bundling tools to include these files
 path.join(__dirname, "schema.prisma");
 path.join(process.cwd(), "src/generated/prisma/schema.prisma")
