@@ -1,6 +1,6 @@
 'use client';
 
-import { SessionProvider } from 'next-auth/react';
+// import { SessionProvider } from 'next-auth/react'; // Temporarily commented out
 import React from 'react';
 
 interface ProvidersProps {
@@ -8,5 +8,6 @@ interface ProvidersProps {
 }
 
 export default function Providers({ children }: ProvidersProps) {
-  return <SessionProvider>{children}</SessionProvider>;
+  // return <SessionProvider>{children}</SessionProvider>; // Temporarily bypassed
+  return <>{children}</>; // Render children directly
 } 
