@@ -7,7 +7,7 @@ module.exports = tseslint.config(
   ...tseslint.configs.recommended,
   prettierConfig,
   {
-    ignores: ['apps/*/.next/', 'apps/*/dist/', 'node_modules/', '.*.js', '*.config.js']
+    ignores: ['apps/*/.next/', 'apps/*/dist/', 'node_modules/', '.*.js', '*.config.js', 'apps/server/src/generated/']
   },
   {
     languageOptions: {

@@ -105,9 +105,9 @@ export async function POST(request: NextRequest) {
         assistantMsg = plan.reasoning || "I understood the action, but no specific parameters were provided to execute.";
         toolResultText = 'No parameters provided for the action.';
       }
-    } catch (toolError: any) {
-      console.error('[API /api/process] Error executing tool:', toolError.message, toolError.stack);
-      return NextResponse.json({ 
+    } catch (toolError: unknown) {
+      console.error('[API /api/process] Error executing tool:', toolError instanceof Error ? toolError.message : toolError, toolError instanceof Error ? toolError.stack : undefined);
+      return NextResponse.json({
         error: 'An error occurred while trying to execute the planned action. Please check server logs for details.',
       }, { status: 500 });
     }
@@ -120,8 +120,8 @@ export async function POST(request: NextRequest) {
       plan 
     });
 
-  } catch (error: any) {
-    console.error('[API /api/process] General error:', error.message, error.stack);
+  } catch (error: unknown) {
+    console.error('[API /api/process] General error:', error instanceof Error ? error.message : error, error instanceof Error ? error.stack : undefined);
     let errorMessage = 'An unexpected error occurred. Please check server logs for details.';
     if (error instanceof SyntaxError) {
       errorMessage = 'Invalid request format: Could not parse JSON body.';
