@@ -1,10 +1,11 @@
 import NextAuth, { AuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
-import { PrismaClient } from "@/generated/prisma";
+// import { PrismaClient } from "@/generated/prisma"; // Old instantiation
+import prisma from "@/lib/prisma"; // New singleton instance
 import { encrypt, decrypt } from "@/lib/encryption"; // Updated import
 
-const prisma = new PrismaClient();
+// const prisma = new PrismaClient(); // Old instantiation removed
 
 if (!process.env.GOOGLE_CLIENT_ID) {
   throw new Error("Missing GOOGLE_CLIENT_ID environment variable");
