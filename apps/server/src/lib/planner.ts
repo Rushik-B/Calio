@@ -22,16 +22,6 @@ const MASTER_PROMPT = fs.readFileSync(P_PROMPT_PATH, "utf-8");
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { z } from "zod";
-import { 
-  CreateEventTool, 
-  ListEventsTool,
-  createEventParamsSchema,
-  listEventsParamsSchema,
-  UpdateEventTool,
-  DeleteEventTool,
-  updateEventParamsSchema,
-  deleteEventParamsSchema
-} from "./calendarTools";
 
 /**
  * Zod — for **runtime validation** *after* Gemini responds.
