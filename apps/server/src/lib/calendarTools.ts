@@ -50,7 +50,7 @@ function transformToGoogleCalendarEvent(
   const event: calendar_v3.Schema$Event = {};
   if (params.summary) event.summary = params.summary;
   
-  let PstartTime = params.startTime;
+  const PstartTime = params.startTime;
   let PendTime = params.endTime;
 
   // Default duration for create_event if endTime is missing and startTime is present

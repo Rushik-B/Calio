@@ -155,7 +155,7 @@ export async function generatePlan(
     const result = await llmWithTools.invoke(messages);
     console.log('[Planner] LLM Result (raw):', JSON.stringify(result, null, 2)); // Log the raw result
 
-    let args: any; // Changed to let and allow any type initially
+    let args: unknown; // Changed from any to unknown
 
     const toolCall = result.tool_calls?.[0];
 
@@ -198,8 +198,9 @@ export async function generatePlan(
 }
 
 //--------------------------------------------------
-// 4.  Quick test runner
+// 4.  Quick test runner (Removed as it's unused)
 //--------------------------------------------------
+/* // Original testPlanner function commented out/removed
 async function testPlanner() {
   if (
     !process.env.GOOGLE_API_KEY &&
@@ -274,22 +275,18 @@ async function testPlanner() {
           toolResult = "Parameter validation failed for DeleteEventTool: " + validatedParams.error.format();
           console.error("DeleteEventTool param validation error:", validatedParams.error.format());
         }
-      } else if (plan.action === "unknown") {
-        toolResult = "Planner determined the action as unknown.";
-      }
-      console.log("Tool Result :", toolResult);
+      } // Add more else if blocks for other tools if necessary
 
+      console.log("Tool Result:", toolResult);
     } else if (plan) {
       console.log("Action    :", plan.action);
-      console.log("Params    : (No params or params were undefined)");
       console.log("Reasoning :", plan.reasoning);
-      console.log("Tool Result : No params to execute a tool.");
     } else {
-      console.log("Failed to generate a plan.");
+      console.log("Failed to generate a plan for the input.");
     }
-    console.log("--------------------------------\n");
   }
 }
+*/
 
 // Uncomment to run: pnpm exec ts-node src/lib/planner.ts
 //testPlanner();

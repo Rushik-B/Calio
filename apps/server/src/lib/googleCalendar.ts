@@ -1,5 +1,4 @@
 import { google, calendar_v3 } from 'googleapis';
-import { Auth } from 'googleapis';
 import { logAuditEvent } from '../lib/auditLog';
 import { Prisma } from '../generated/prisma';
 
@@ -37,14 +36,14 @@ export async function listEvents(userId: string, accessToken: string, options?: 
             payload: { options: options ? JSON.stringify(options) : undefined, resultCount: events?.length } as Prisma.InputJsonObject,
         });
         return events;
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Error listing events:', error);
         await logAuditEvent({
             userId,
             action,
             status: 'FAILURE',
             payload: { options: options ? JSON.stringify(options) : undefined } as Prisma.InputJsonObject,
-            error: error.message || String(error),
+            error: error instanceof Error ? error.message : String(error),
         });
         return null;
     }
@@ -75,14 +74,14 @@ export async function insertEvent(userId: string, accessToken: string, event: ca
             payload: { event: JSON.stringify(event), createdEventId: createdEvent.id } as Prisma.InputJsonObject,
         });
         return createdEvent; // Return the created event data
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Error inserting event:', error);
         await logAuditEvent({
             userId,
             action,
             status: 'FAILURE',
             payload: { event: JSON.stringify(event) } as Prisma.InputJsonObject,
-            error: error.message || String(error),
+            error: error instanceof Error ? error.message : String(error),
         });
         return null;
     }
@@ -114,14 +113,14 @@ export async function patchEvent(userId: string, accessToken: string, eventId: s
             payload: { eventId, eventPatch: JSON.stringify(eventPatch), updatedEventId: updatedEvent.id } as Prisma.InputJsonObject,
         });
         return updatedEvent;
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Error patching event:', error);
         await logAuditEvent({
             userId,
             action,
             status: 'FAILURE',
             payload: { eventId, eventPatch: JSON.stringify(eventPatch) } as Prisma.InputJsonObject,
-            error: error.message || String(error),
+            error: error instanceof Error ? error.message : String(error),
         });
         return null;
     }
@@ -150,14 +149,14 @@ export async function deleteEvent(userId: string, accessToken: string, eventId: 
             payload: { eventId } as Prisma.InputJsonObject,
         });
         return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error('Error deleting event:', error);
         await logAuditEvent({
             userId,
             action,
             status: 'FAILURE',
             payload: { eventId } as Prisma.InputJsonObject,
-            error: error.message || String(error),
+            error: error instanceof Error ? error.message : String(error),
         });
         return false;
     }
