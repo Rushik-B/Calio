@@ -17,6 +17,7 @@ interface AuditEventData {
  */
 export async function logAuditEvent(data: AuditEventData): Promise<void> {
   try {
+    console.log(`[logAuditEvent] Attempting to log audit for userId: ${data.userId}, action: ${data.action}, status: ${data.status}`);
     await prisma.auditEvent.create({
       data: {
         userId: data.userId,

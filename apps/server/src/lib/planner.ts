@@ -26,8 +26,12 @@ import {
   CreateEventTool, 
   ListEventsTool,
   createEventParamsSchema,
-  listEventsParamsSchema
-} from "./calendarTools.ts";
+  listEventsParamsSchema,
+  UpdateEventTool,
+  DeleteEventTool,
+  updateEventParamsSchema,
+  deleteEventParamsSchema
+} from "./calendarTools";
 
 /**
  * Zod — for **runtime validation** *after* Gemini responds.
@@ -75,11 +79,11 @@ const jsonParameters = {
     },
     params: {
       type: "object",
-      description: "Action-specific parameters. Include relevant details like summary, startTime, endTime, attendees, eventId etc., based on the user query and the chosen action.",
+      description: "Action-specific parameters. Include relevant details like summary, startTime, endTime, attendees, eventId etc., based on the user query and the chosen action. For create_event, startTime and endTime are crucial.",
       properties: {
         summary: { type: "string", description: "The summary or title of the event." },
         startTime: { type: "string", description: "The start date and time of the event in ISO 8601 format (e.g., YYYY-MM-DDTHH:mm:ssZ)." },
-        endTime: { type: "string", description: "The end date and time of the event in ISO 8601 format." },
+        endTime: { type: "string", description: "The end date and time of the event in ISO 8601 format. Required for creating events. If the user doesn't specify a duration, assume a 1-hour duration." },
         attendees: { type: "array", items: { type: "string" }, description: "List of attendee email addresses or names." },
         eventId: { type: "string", description: "The ID of the event to update or delete." },
         // Adding a generic query parameter for list_events
@@ -87,8 +91,10 @@ const jsonParameters = {
         timeMin: { type: "string", description: "The minimum start time for listing events (ISO 8601 format), used with list_events." },
         timeMax: { type: "string", description: "The maximum start time for listing events (ISO 8601 format), used with list_events." },
       },
-      // Temporarily allow additional properties for params to see if LLM returns more data
+      // Temporarily allow additionalProperties for params to see if LLM returns more data
       additionalProperties: true, 
+      required: ["startTime", "endTime"] // Tentatively make endTime required here for create_event
+      // We'll handle the defaulting logic in CreateEventTool if LLM omits it despite this.
     },
     reasoning: {
       type: "string",
@@ -127,13 +133,23 @@ const llmWithTools = model.bind({
 //--------------------------------------------------
 export async function generatePlan(
   text: string,
+  currentTimeISO?: string
 ): Promise<CalendarAction | null> {
   console.log(`[Planner] Received text: "${text}"`);
+  if (currentTimeISO) {
+    console.log(`[Planner] Current time context: ${currentTimeISO}`);
+  }
 
   try {
-    // Use SystemMessage for the master prompt and HumanMessage for the user input
+    let systemPromptContent = MASTER_PROMPT;
+    if (currentTimeISO) {
+      // More detailed instruction for the LLM about handling timezones, complementing calendar.md
+      const currentTimeMessage = `SYSTEM NOTE: Current date and time is ${currentTimeISO} (UTC). Interpret relative dates (e.g., 'tomorrow') based on this UTC time. For times of day (e.g., '3 pm') provided by the user without an explicit timezone, assume they refer to a common local time (e.g., US Eastern Time for general North American context if no other cues). However, you MUST ensure that the final startTime and endTime parameters you generate are fully resolved to UTC in ISO 8601 format.`;
+      systemPromptContent = `${currentTimeMessage}\n\n${MASTER_PROMPT}`;
+    }
+
     const messages = [
-      new SystemMessage(MASTER_PROMPT),
+      new SystemMessage(systemPromptContent),
       new HumanMessage(text),
     ];
     const result = await llmWithTools.invoke(messages);
@@ -195,15 +211,20 @@ async function testPlanner() {
     return;
   }
 
+  // Get current time in ISO format for testing
+  const nowISO = new Date().toISOString();
+
   const inputs = [
     "Schedule a meeting with John for tomorrow at 2 pm to discuss the project budget.",
     "What's on my calendar for next Monday?",
-    "Delete the meeting about the budget.", 
+    "Delete the meeting about the budget.",
+    "Change the meeting 'Project Kickoff' with event ID projKickoff123 to next Friday at 10am."
   ];
 
   for (const input of inputs) {
     console.log(`\n--- Processing Input: "${input}" ---`);
-    const plan = await generatePlan(input);
+    // Pass the current time to generatePlan for the test runner
+    const plan = await generatePlan(input, nowISO);
 
     console.log("\n--- Test Planner Output ---");
     if (plan && plan.params) {
@@ -213,10 +234,14 @@ async function testPlanner() {
 
       let toolResult = "No specific tool execution for this action.";
 
+      // Dummy values for testing tool instantiation
+      const DUMMY_USER_ID = "test-user-id";
+      const DUMMY_ACCESS_TOKEN = "test-access-token";
+
       if (plan.action === "create_event") {
         const validatedParams = createEventParamsSchema.safeParse(plan.params);
         if (validatedParams.success) {
-          const createTool = new CreateEventTool();
+          const createTool = new CreateEventTool(DUMMY_USER_ID, DUMMY_ACCESS_TOKEN);
           toolResult = await createTool.call(validatedParams.data);
         } else {
           toolResult = "Parameter validation failed for CreateEventTool: " + validatedParams.error.format();
@@ -225,18 +250,30 @@ async function testPlanner() {
       } else if (plan.action === "list_events") {
         const validatedParams = listEventsParamsSchema.safeParse(plan.params);
         if (validatedParams.success) {
-          const listTool = new ListEventsTool();
+          const listTool = new ListEventsTool(DUMMY_USER_ID, DUMMY_ACCESS_TOKEN);
           toolResult = await listTool.call(validatedParams.data);
         } else {
           toolResult = "Parameter validation failed for ListEventsTool: " + validatedParams.error.format();
           console.error("ListEventsTool param validation error:", validatedParams.error.format());
         }
       } else if (plan.action === "update_event") {
-        toolResult = "UpdateEventTool would be called here (not implemented).";
-        console.log("TODO: Implement UpdateEventTool and call it here.");
+        const validatedParams = updateEventParamsSchema.safeParse(plan.params);
+        if (validatedParams.success) {
+          const updateTool = new UpdateEventTool(DUMMY_USER_ID, DUMMY_ACCESS_TOKEN);
+          toolResult = await updateTool.call(validatedParams.data);
+        } else {
+          toolResult = "Parameter validation failed for UpdateEventTool: " + validatedParams.error.format();
+          console.error("UpdateEventTool param validation error:", validatedParams.error.format());
+        }
       } else if (plan.action === "delete_event") {
-        toolResult = "DeleteEventTool would be called here (not implemented).";
-        console.log("TODO: Implement DeleteEventTool and call it here.");
+        const validatedParams = deleteEventParamsSchema.safeParse(plan.params);
+        if (validatedParams.success) {
+          const deleteTool = new DeleteEventTool(DUMMY_USER_ID, DUMMY_ACCESS_TOKEN);
+          toolResult = await deleteTool.call(validatedParams.data);
+        } else {
+          toolResult = "Parameter validation failed for DeleteEventTool: " + validatedParams.error.format();
+          console.error("DeleteEventTool param validation error:", validatedParams.error.format());
+        }
       } else if (plan.action === "unknown") {
         toolResult = "Planner determined the action as unknown.";
       }
@@ -255,4 +292,4 @@ async function testPlanner() {
 }
 
 // Uncomment to run: pnpm exec ts-node src/lib/planner.ts
-testPlanner();
+//testPlanner();

@@ -7,7 +7,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "e2e:createMeeting": "node scripts/e2e-create-meeting.js"
   },
   "dependencies": {
     "@langchain/core": "^0.3.54",
@@ -27,6 +28,7 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "axios": "^1.7.2",
     "dotenv": "^16.5.0",
     "eslint": "^8",
     "eslint-config-next": "14.2.28",
