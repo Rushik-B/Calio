@@ -11,14 +11,14 @@
     "e2e:createMeeting": "node scripts/e2e-create-meeting.js"
   },
   "dependencies": {
-    "@auth/nextjs": "0.0.0-380f8d56",
-    "@auth/prisma-adapter": "^2.9.1",
     "@langchain/core": "^0.3.54",
     "@langchain/google-genai": "^0.2.6",
     "@prisma/client": "6.7.0",
     "googleapis": "^148.0.0",
     "langchain": "^0.3.24",
     "next": "14.2.28",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "zod": "^3.24.4",
     "zod-to-json-schema": "^3.24.5"
   },

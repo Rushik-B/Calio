@@ -23,11 +23,15 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  accounts    Account[]
-  sessions    Session[]
+  // Removed auth-related relations as part of reset
+  // accounts    Account[]
+  // sessions    Session[]
   auditEvents AuditEvent[]
 }
 
+// Auth-related models commented out as part of reset
+// Uncomment and modify as needed when implementing authentication
+/*
 model Account {
   id                String  @id @default(cuid())
   userId            String
@@ -63,6 +67,7 @@ model VerificationToken {
 
   @@unique([identifier, token])
 }
+*/
 
 model AuditEvent {
   id        String   @id @default(cuid())
