@@ -6,12 +6,12 @@ if (process.env.NODE_ENV === 'production') {
   prisma = new PrismaClient();
 } else {
   // Ensure the prisma instance is re-used during hot-reloading
-  // @ts-ignore
+  // @ts-expect-error
   if (!global.prisma) {
-    // @ts-ignore
+    // @ts-expect-error
     global.prisma = new PrismaClient();
   }
-  // @ts-ignore
+  // @ts-expect-error
   prisma = global.prisma;
 }
 
