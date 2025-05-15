@@ -5,10 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
-    "lint": "next lint",
-    "e2e:createMeeting": "node scripts/e2e-create-meeting.js"
+    "lint": "next lint"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.9.1",
