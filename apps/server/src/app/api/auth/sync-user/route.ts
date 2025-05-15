@@ -7,7 +7,11 @@ export async function POST(req: NextRequest) {
   // 1. Get the Clerk session token from the Authorization header
   const authHeader = req.headers.get("authorization");
   if (!authHeader) return NextResponse.json({ error: "No auth header" }, { status: 401 });
+  
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const token = authHeader.replace("Bearer ", ""); // get the token from the header
+
+  console.log("token", token);
 
   // 2. Verify the token and get Clerk user info
   let userId: string;
