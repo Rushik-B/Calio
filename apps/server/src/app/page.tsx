@@ -1,8 +1,31 @@
-export default function Home() {
+// src/app/page.tsx
+
+import { auth, signIn, signOut } from "@/auth"
+import { ErrlyLogButton } from "@/components/errly-log-button"
+
+export default async function HomePage() {
+  const session = await auth();
+
+  console.log("Session on server:", session);
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
-      <h1 className="text-4xl font-bold mb-8">Welcome to the App</h1>
-      <p className="text-xl">This is a fresh start. Ready to build something amazing!</p>
-    </main>
-  );
-}
+    <div>
+      <form
+        action={async () => {
+          "use server"
+          await signIn("google")
+        }}
+      >
+        <button type="submit">Signin with Google</button>
+        <ErrlyLogButton />
+      </form>
+
+      {session && (
+        <div>
+          <hr />
+          <p>Logged in as: {session.user?.name} ({session.user?.email})</p>
+        </div>
+      )}
+    </div>
+  )
+} 

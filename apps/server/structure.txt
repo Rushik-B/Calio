@@ -1,77 +1,92 @@
 ## This file Contains the whole structure of Server directory. Always update this file after making any changes to the directory structure or adding/ deleting any files.
 
+
 .
+├── OVERVIEW.md
 ├── README.md
 ├── next-env.d.ts
 ├── next.config.mjs
 ├── package.json
 ├── postcss.config.mjs
 ├── prisma
-│   ├── migrations
-│   │   ├── 20250505194106_init
-│   │   │   └── migration.sql
-│   │   ├── 20250505201943_add_nextauth_models
-│   │   │   └── migration.sql
-│   │   ├── 20250505221629_add_user_email_verified
-│   │   │   └── migration.sql
-│   │   ├── 20250505221902_add_account_refresh_token_expires_in
-│   │   │   └── migration.sql
-│   │   └── migration_lock.toml
-│   └── schema.prisma
+│   ├── migrations
+│   │   ├── 20250505194106_init
+│   │   │   └── migration.sql
+│   │   ├── 20250505201943_add_nextauth_models
+│   │   │   └── migration.sql
+│   │   ├── 20250505221629_add_user_email_verified
+│   │   │   └── migration.sql
+│   │   ├── 20250505221902_add_account_refresh_token_expires_in
+│   │   │   └── migration.sql
+│   │   └── migration_lock.toml
+│   └── schema.prisma
+├── scripts
+│   └── e2e-create-meeting.js
 ├── src
-│   ├── app
-│   │   ├── api
-│   │   │   ├── auth
-│   │   │   │   └── [...nextauth]
-│   │   │   │       └── route.ts
-│   │   │   └── calendar
-│   │   │       └── hello
-│   │   │           └── route.ts
-│   │   │   ├── process
-│   │   │   │   └── route.ts
-│   │   ├── favicon.ico
-│   │   ├── fonts
-│   │   │   ├── GeistMonoVF.woff
-│   │   │   └── GeistVF.woff
-│   │   ├── globals.css
-│   │   ├── layout.tsx
-│   │   ├── page.tsx
-│   │   └── providers.tsx
-│   ├── generated
-│   │   └── prisma
-│   │       ├── client.d.ts
-│   │       ├── client.js
-│   │       ├── default.d.ts
-│   │       ├── default.js
-│   │       ├── edge.d.ts
-│   │       ├── edge.js
-│   │       ├── index-browser.js
-│   │       ├── index.d.ts
-│   │       ├── index.js
-│   │       ├── libquery_engine-darwin-arm64.dylib.node
-│   │       ├── package.json
-│   │       ├── runtime
-│   │       │   ├── edge-esm.js
-│   │       │   ├── edge.js
-│   │       │   ├── index-browser.d.ts
-│   │       │   ├── index-browser.js
-│   │       │   ├── library.d.ts
-│   │       │   ├── library.js
-│   │       │   ├── react-native.js
-│   │       │   └── wasm.js
-│   │       ├── schema.prisma
-│   │       ├── wasm.d.ts
-│   │       └── wasm.js
-│   ├── lib
-│   │   ├── auditLog.ts
-│   │   ├── calendarTools.ts
-│   │   ├── encryption.ts
-│   │   ├── googleCalendar.ts
-│   │   └── planner.ts
-│   ├── prompts
-│   │   └── calendar.md
-│   └── types
-│       └── next-auth.d.ts
+│   ├── app
+│   │   ├── api
+│   │   │   ├── auth
+│   │   │   │   └── [...nextauth]
+│   │   │   │       └── route.ts
+│   │   │   ├── calendar
+│   │   │   │   └── hello
+│   │   │   │       └── route.ts
+│   │   │   ├── chat
+│   │   │   │   └── route.ts
+│   │   │   └── process
+│   │   │       └── route.ts
+│   │   ├── auth
+│   │   │   └── mobile-redirect-landing
+│   │   │       └── page.tsx
+│   │   ├── favicon.ico
+│   │   ├── fonts
+│   │   │   ├── GeistMonoVF.woff
+│   │   │   └── GeistVF.woff
+│   │   ├── globals.css
+│   │   ├── layout.tsx
+│   │   ├── page.tsx
+│   │   └── profile
+│   ├── auth.ts
+│   ├── components
+│   │   ├── errly-initializer.tsx
+│   │   └── errly-log-button.tsx
+│   ├── generated
+│   │   └── prisma
+│   │       ├── client.d.ts
+│   │       ├── client.js
+│   │       ├── default.d.ts
+│   │       ├── default.js
+│   │       ├── edge.d.ts
+│   │       ├── edge.js
+│   │       ├── index-browser.js
+│   │       ├── index.d.ts
+│   │       ├── index.js
+│   │       ├── libquery_engine-darwin-arm64.dylib.node
+│   │       ├── libquery_engine-rhel-openssl-3.0.x.so.node
+│   │       ├── package.json
+│   │       ├── runtime
+│   │       │   ├── edge-esm.js
+│   │       │   ├── edge.js
+│   │       │   ├── index-browser.d.ts
+│   │       │   ├── index-browser.js
+│   │       │   ├── library.d.ts
+│   │       │   ├── library.js
+│   │       │   ├── react-native.js
+│   │       │   └── wasm.js
+│   │       ├── schema.prisma
+│   │       ├── wasm.d.ts
+│   │       └── wasm.js
+│   ├── lib
+│   │   ├── auditLog.ts
+│   │   ├── calendarTools.ts
+│   │   ├── encryption.ts
+│   │   ├── googleCalendar.ts
+│   │   ├── planner.ts
+│   │   ├── prisma.ts
+│   │   └── responseFormatter.ts
+│   ├── prompts
+│   │   └── calendar.md
+│   └── types
 ├── structure.txt
 ├── tailwind.config.ts
 └── tsconfig.json

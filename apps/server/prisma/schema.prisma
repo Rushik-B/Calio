@@ -6,7 +6,6 @@
 
 generator client {
   provider      = "prisma-client-js"
-  output        = "../src/generated/prisma"
   binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
@@ -16,68 +15,26 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  emailVerified DateTime? @map("email_verified")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Removed auth-related relations as part of reset
-  // accounts    Account[]
-  // sessions    Session[]
-  auditEvents AuditEvent[]
-}
-
-// Auth-related models commented out as part of reset
-// Uncomment and modify as needed when implementing authentication
-/*
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String? // Stored encrypted
-  access_token      String? // Stored encrypted
-  expires_at        Int?
-  refresh_token_expires_in Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
-}
-
-model Session {
   id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
+  clerkUserId  String   @unique       // Store Clerk user.id here
+  email        String   @unique
+  name         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-
-  @@unique([identifier, token])
+  auditEvents  AuditEvent[]
 }
-*/
 
 model AuditEvent {
   id        String   @id @default(cuid())
-  action    String // e.g., "googleCalendar.createEvent", "user.login"
-  status    String // e.g., "success", "failure", "pending"
-  requestId String? // Optional correlation ID
-  payload   Json? // Request/response details
+  action    String   // e.g., "googleCalendar.createEvent", "user.login"
+  status    String   // e.g., "success", "failure", "pending"
+  requestId String?  // Optional correlation ID
+  payload   Json?    // Request/response details
   error     String?
   timestamp DateTime @default(now())
 
-  user   User   @relation(fields: [userId], references: [id])
-  userId String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
 }
+
