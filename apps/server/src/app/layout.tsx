@@ -1,4 +1,4 @@
-import { ErrlyInitializer } from '@/components/errly-initializer';
+//import { ErrlyInitializer } from '@/components/errly-initializer';
 
 export const metadata = {
   title: 'Next.js',
@@ -13,7 +13,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <ErrlyInitializer />
+        {/*<ErrlyInitializer />*/}
         {children}
       </body>
     </html>
