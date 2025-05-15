@@ -17,7 +17,7 @@ The core architecture leverages a Large Language Model (LLM) like Google's gemin
 *   **Mobile Frontend:** React Native + Expo (for iOS initially)
 *   **Backend API Server:** Next.js 15 (TypeScript)
 *   **LLM Orchestration:** LangChain.js
-*   **LLM Provider:** OpenAI (GPT-4o or similar)
+*   **LLM Provider:** OpenAI (Google Gemini flash 2.0 or similar)
 *   **External API:** Google Calendar API
 *   **Database:** PostgreSQL (for user preferences, OAuth tokens, audit logs)
 *   **Push Notifications:** Expo Push Notification Service
