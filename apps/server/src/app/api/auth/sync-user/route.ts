@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
   // 1. Get the Clerk session token from the Authorization header
   const authHeader = req.headers.get("authorization");
   if (!authHeader) return NextResponse.json({ error: "No auth header" }, { status: 401 });
-  
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const token = authHeader.replace("Bearer ", ""); // get the token from the header
 
@@ -19,16 +19,19 @@ export async function POST(req: NextRequest) {
     const { userId: uid } = getAuth(req); // if using @clerk/nextjs/server
     if (!uid) throw new Error("No userId found in session");
     userId = uid;
-  } catch (err: any) {
-    return NextResponse.json({ error: "Unauthorized: " + err.message }, { status: 401 });
+  } catch (err: unknown) {
+    // Use a type guard to access err.message safely
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Unauthorized: " + message }, { status: 401 });
   }
 
   // 3. Fetch Clerk user object (for email, name, etc.)
   let clerkUser;
   try {
     clerkUser = await clerkClient.users.getUser(userId);
-  } catch (err: any) {
-    return NextResponse.json({ error: "Failed to get Clerk user: " + err.message }, { status: 400 });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Failed to get Clerk user: " + message }, { status: 400 });
   }
 
   const email = clerkUser.emailAddresses[0].emailAddress;
