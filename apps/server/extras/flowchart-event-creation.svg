@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1200 1000">
+  <style>
+    .box {
+      fill: #f0f0f0;
+      stroke: #333;
+      stroke-width: 2;
+      rx: 10;
+      ry: 10;
+    }
+    .api-box { fill: #d1ecf1; }
+    .planner-box { fill: #d4edda; }
+    .controller-box { fill: #fff3cd; }
+    .creator-box { fill: #f8d7da; }
+    .tools-box { fill: #e2e3e5; }
+    .google-box { fill: #cce5ff; }
+    
+    .arrow {
+      stroke: #333;
+      stroke-width: 2;
+      fill: none;
+      marker-end: url(#arrowhead);
+    }
+    
+    .label {
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      fill: #333;
+    }
+    
+    .title {
+      font-family: Arial, sans-serif;
+      font-size: 16px;
+      font-weight: bold;
+      fill: #333;
+      text-anchor: middle;
+    }
+    
+    .small-text {
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      fill: #666;
+    }
+    
+    .data-item {
+      font-family: Arial, sans-serif;
+      font-size: 12px;
+      fill: #333;
+    }
+  </style>
+  
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333" />
+    </marker>
+  </defs>
+  
+  <!-- Title -->
+  <text x="600" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle">Event Creation Flow</text>
+  
+  <!-- 1. API Route Handler -->
+  <rect x="100" y="80" width="220" height="180" class="box api-box" />
+  <text x="210" y="110" class="title">1. API Route Handler</text>
+  <text x="120" y="140" class="data-item">• Receives POST request</text>
+  <text x="120" y="165" class="data-item">• Key inputs: text, userTimezone</text>
+  <text x="120" y="190" class="data-item">• Authentication via Clerk</text>
+  <text x="120" y="215" class="data-item">• Prepares data for planner</text>
+  <text x="120" y="240" class="data-item">• Calls planner & controller</text>
+  <text x="210" y="245" class="small-text" text-anchor="middle">src/app/api/chat/route.ts</text>
+  
+  <!-- 2. Planner -->
+  <rect x="440" y="80" width="220" height="180" class="box planner-box" />
+  <text x="550" y="110" class="title">2. Planner</text>
+  <text x="460" y="140" class="data-item">• Function: generatePlan</text>
+  <text x="460" y="165" class="data-item">• Uses LLM to interpret input</text>
+  <text x="460" y="190" class="data-item">• Gemini model w/ function calling</text>
+  <text x="460" y="215" class="data-item">• Determines action (create_event)</text>
+  <text x="460" y="240" class="data-item">• Returns plan object</text>
+  <text x="550" y="245" class="small-text" text-anchor="middle">src/lib/planner.ts</text>
+  
+  <!-- 3. Chat Controller -->
+  <rect x="780" y="80" width="220" height="180" class="box controller-box" />
+  <text x="890" y="110" class="title">3. Chat Controller</text>
+  <text x="800" y="140" class="data-item">• Function: executePlan</text>
+  <text x="800" y="165" class="data-item">• For create_event action:</text>
+  <text x="800" y="190" class="data-item">• Calls EventCreatorLLM</text>
+  <text x="800" y="215" class="data-item">• Iterates through events</text>
+  <text x="800" y="240" class="data-item">• Returns creation summary</text>
+  <text x="890" y="245" class="small-text" text-anchor="middle">src/lib/chatController.ts</text>
+  
+  <!-- 4. Event Creator LLM -->
+  <rect x="440" y="380" width="220" height="180" class="box creator-box" />
+  <text x="550" y="410" class="title">4. Event Creator LLM</text>
+  <text x="460" y="440" class="data-item">• generateEventCreationJSONs</text>
+  <text x="460" y="465" class="data-item">• Uses specialized prompt</text>
+  <text x="460" y="490" class="data-item">• Gemini model for parsing</text>
+  <text x="460" y="515" class="data-item">• Validates event structure</text>
+  <text x="460" y="540" class="data-item">• Returns array of event objects</text>
+  <text x="550" y="545" class="small-text" text-anchor="middle">src/lib/eventCreatorLLM.ts</text>
+  
+  <!-- 5. Calendar Tools -->
+  <rect x="780" y="380" width="220" height="180" class="box tools-box" />
+  <text x="890" y="410" class="title">5. Calendar Tools</text>
+  <text x="800" y="440" class="data-item">• Class: CreateEventTool</text>
+  <text x="800" y="465" class="data-item">• Transforms event data</text>
+  <text x="800" y="490" class="data-item">• Maps to Google Calendar format</text>
+  <text x="800" y="515" class="data-item">• Calls Google Calendar API</text>
+  <text x="800" y="540" class="data-item">• Returns success/error message</text>
+  <text x="890" y="545" class="small-text" text-anchor="middle">src/lib/calendarTools.ts</text>
+  
+  <!-- 6. Google Calendar API Wrapper -->
+  <rect x="600" y="680" width="220" height="180" class="box google-box" />
+  <text x="710" y="710" class="title">6. Google Calendar API</text>
+  <text x="620" y="740" class="data-item">• Function: insertEvent</text>
+  <text x="620" y="765" class="data-item">• Gets authenticated client</text>
+  <text x="620" y="790" class="data-item">• Calls calendar.events.insert</text>
+  <text x="620" y="815" class="data-item">• Logs audit event</text>
+  <text x="620" y="840" class="data-item">• Returns created event or null</text>
+  <text x="710" y="845" class="small-text" text-anchor="middle">src/lib/googleCalendar.ts</text>
+  
+  <!-- Example Data Boxes -->
+  <rect x="100" y="680" width="380" height="180" rx="10" ry="10" fill="#f8f9fa" stroke="#333" stroke-width="1" />
+  <text x="290" y="710" class="title">Example Event Object</text>
+  <text x="120" y="740" class="data-item" style="font-family: monospace;">{</text>
+  <text x="140" y="765" class="data-item" style="font-family: monospace;">"summary": "Work",</text>
+  <text x="140" y="790" class="data-item" style="font-family: monospace;">"start": { "dateTime": "2025-05-27T11:00:00-07:00" },</text>
+  <text x="140" y="815" class="data-item" style="font-family: monospace;">"end": { "dateTime": "2025-05-27T14:00:00-07:00" },</text>
+  <text x="140" y="840" class="data-item" style="font-family: monospace;">"calendarId": "f734...929f@group.calendar.google.com"</text>
+  <text x="120" y="865" class="data-item" style="font-family: monospace;">}</text>
+  
+  <!-- Natural Language Input Example -->
+  <rect x="100" y="380" width="240" height="100" rx="10" ry="10" fill="#e9ecef" stroke="#333" stroke-width="1" />
+  <text x="220" y="410" class="title" style="font-size: 14px;">User Input Example</text>
+  <text x="120" y="440" class="data-item" style="font-style: italic">"I have work next week on tuesday</text>
+  <text x="120" y="465" class="data-item" style="font-style: italic">and Monday from 11-2pm and 1-2 pm resp"</text>
+  
+  <!-- Arrows -->
+  <!-- API to Planner -->
+  <path d="M 320 170 L 440 170" class="arrow" />
+  <text x="380" y="155" class="small-text" text-anchor="middle">userInput, timezone</text>
+  
+  <!-- Planner to Controller -->
+  <path d="M 660 170 L 780 170" class="arrow" />
+  <text x="720" y="155" class="small-text" text-anchor="middle">plan object</text>
+  
+  <!-- Controller to Event Creator -->
+  <path d="M 890 260 L 890 300 L 550 300 L 550 380" class="arrow" />
+  <text x="720" y="280" class="small-text" text-anchor="middle">userInput, timezone</text>
+  
+  <!-- Event Creator to Controller -->
+  <path d="M 660 470 L 720 470 L 720 400 L 780 400" class="arrow" />
+  <text x="720" y="445" class="small-text" text-anchor="middle">event objects</text>
+  
+  <!-- Controller to Calendar Tools -->
+  <path d="M 890 260 L 890 380" class="arrow" />
+  <text x="910" y="320" class="small-text">iterates through events</text>
+  
+  <!-- Calendar Tools to Google API -->
+  <path d="M 890 560 L 890 600 L 710 600 L 710 680" class="arrow" />
+  <text x="800" y="580" class="small-text" text-anchor="middle">transformed event</text>
+  
+  <!-- Google API to Controller (response) -->
+  <path d="M 600 770 L 500 770 L 500 600 L 780 600" class="arrow" stroke-dasharray="5,5" />
+  <text x="580" y="750" class="small-text" text-anchor="middle">response</text>
+  
+  <!-- User Input to API -->
+  <path d="M 220 380 L 220 260" class="arrow" />
+  
+  <!-- Event Creator to Example Data -->
+  <path d="M 550 560 L 550 600 L 290 600 L 290 680" class="arrow" stroke-dasharray="5,5" />
+  <text x="420" y="580" class="small-text" text-anchor="middle">generates</text>
+</svg>

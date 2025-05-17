@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { clerkClient } from "@clerk/clerk-sdk-node"; 
-import { getAuth } from "@clerk/nextjs/server";
+import { clerkClient } from "@clerk/clerk-sdk-node";
+// import { getAuth } from "@clerk/nextjs/server"; removed
 import prisma from "@/lib/prisma";
 
 export async function POST(req: NextRequest) {
@@ -8,21 +8,23 @@ export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (!authHeader) return NextResponse.json({ error: "No auth header" }, { status: 401 });
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const token = authHeader.replace("Bearer ", ""); // get the token from the header
-
-  console.log("token", token);
+  const token = authHeader.replace("Bearer ", "");
+  if (!token) {
+    return NextResponse.json({ error: "Malformed token in Authorization header" }, { status: 401 });
+  }
 
   // 2. Verify the token and get Clerk user info
   let userId: string;
   try {
-    const { userId: uid } = getAuth(req); // if using @clerk/nextjs/server
-    if (!uid) throw new Error("No userId found in session");
-    userId = uid;
+    const claims = await clerkClient.verifyToken(token);
+
+    if (!claims.sub) {
+      throw new Error("User ID (sub) not found in token claims");
+    }
+    userId = claims.sub;
   } catch (err: unknown) {
-    // Use a type guard to access err.message safely
     const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Unauthorized: " + message }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized: Invalid token. " + message }, { status: 401 });
   }
 
   // 3. Fetch Clerk user object (for email, name, etc.)

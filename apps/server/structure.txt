@@ -2,8 +2,13 @@
 
 
 .
+├── EVENT_CREATION_FLOW.md
 ├── OVERVIEW.md
+├── Plan.md
 ├── README.md
+├── TO-DO-PROMPTS.md
+├── extras
+│   └── flowchart-event-creation.svg
 ├── next-env.d.ts
 ├── next.config.mjs
 ├── package.json
@@ -18,74 +23,46 @@
 │   │   │   └── migration.sql
 │   │   ├── 20250505221902_add_account_refresh_token_expires_in
 │   │   │   └── migration.sql
+│   │   ├── 20250515205751_cleanup_for_clerk
+│   │   │   └── migration.sql
 │   │   └── migration_lock.toml
 │   └── schema.prisma
 ├── scripts
-│   └── e2e-create-meeting.js
 ├── src
 │   ├── app
 │   │   ├── api
 │   │   │   ├── auth
-│   │   │   │   └── [...nextauth]
+│   │   │   │   └── sync-user
 │   │   │   │       └── route.ts
 │   │   │   ├── calendar
-│   │   │   │   └── hello
+│   │   │   ├── calendars
+│   │   │   │   └── list
+│   │   │   │       ├── APIDOCS.md
 │   │   │   │       └── route.ts
 │   │   │   ├── chat
+│   │   │   │   ├── APIDOCS.md
 │   │   │   │   └── route.ts
 │   │   │   └── process
-│   │   │       └── route.ts
-│   │   ├── auth
-│   │   │   └── mobile-redirect-landing
-│   │   │       └── page.tsx
 │   │   ├── favicon.ico
 │   │   ├── fonts
 │   │   │   ├── GeistMonoVF.woff
 │   │   │   └── GeistVF.woff
 │   │   ├── globals.css
 │   │   ├── layout.tsx
-│   │   ├── page.tsx
 │   │   └── profile
-│   ├── auth.ts
-│   ├── components
-│   │   ├── errly-initializer.tsx
-│   │   └── errly-log-button.tsx
-│   ├── generated
-│   │   └── prisma
-│   │       ├── client.d.ts
-│   │       ├── client.js
-│   │       ├── default.d.ts
-│   │       ├── default.js
-│   │       ├── edge.d.ts
-│   │       ├── edge.js
-│   │       ├── index-browser.js
-│   │       ├── index.d.ts
-│   │       ├── index.js
-│   │       ├── libquery_engine-darwin-arm64.dylib.node
-│   │       ├── libquery_engine-rhel-openssl-3.0.x.so.node
-│   │       ├── package.json
-│   │       ├── runtime
-│   │       │   ├── edge-esm.js
-│   │       │   ├── edge.js
-│   │       │   ├── index-browser.d.ts
-│   │       │   ├── index-browser.js
-│   │       │   ├── library.d.ts
-│   │       │   ├── library.js
-│   │       │   ├── react-native.js
-│   │       │   └── wasm.js
-│   │       ├── schema.prisma
-│   │       ├── wasm.d.ts
-│   │       └── wasm.js
 │   ├── lib
 │   │   ├── auditLog.ts
 │   │   ├── calendarTools.ts
-│   │   ├── encryption.ts
+│   │   ├── chatController.ts
+│   │   ├── eventAnalyzer.ts
+│   │   ├── eventCreatorLLM.ts
+│   │   ├── generalChatHandler.ts
 │   │   ├── googleCalendar.ts
 │   │   ├── planner.ts
-│   │   ├── prisma.ts
-│   │   └── responseFormatter.ts
+│   │   └── prisma.ts
 │   ├── prompts
-│   │   └── calendar.md
+│   │   ├── calendar.md
+│   │   └── eventCreatorPrompt.md
 │   └── types
 ├── structure.txt
 ├── tailwind.config.ts

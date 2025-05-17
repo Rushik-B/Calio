@@ -1,9 +1,9 @@
-import { PrismaClient, Prisma } from '../generated/prisma';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
 interface AuditEventData {
-  userId: string;
+  clerkUserId: string;
   action: string;
   status: 'SUCCESS' | 'FAILURE' | 'PENDING';
   requestId?: string;
@@ -17,10 +17,23 @@ interface AuditEventData {
  */
 export async function logAuditEvent(data: AuditEventData): Promise<void> {
   try {
-    console.log(`[logAuditEvent] Attempting to log audit for userId: ${data.userId}, action: ${data.action}, status: ${data.status}`);
+    console.log(`[logAuditEvent] Attempting to log audit for clerkUserId: ${data.clerkUserId}, action: ${data.action}, status: ${data.status}`);
+
+    const user = await prisma.user.findUnique({
+      where: { clerkUserId: data.clerkUserId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      console.error(`[logAuditEvent] User not found with clerkUserId: ${data.clerkUserId}. Audit event will not be logged.`);
+      // Optionally, you could throw an error here if this is a critical failure condition
+      // throw new Error(`User not found with clerkUserId: ${data.clerkUserId}`);
+      return;
+    }
+
     await prisma.auditEvent.create({
       data: {
-        userId: data.userId,
+        userId: user.id,
         action: data.action,
         status: data.status,
         requestId: data.requestId,
