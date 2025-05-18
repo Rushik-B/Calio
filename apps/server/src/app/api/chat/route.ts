@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clerkClient } from "@clerk/clerk-sdk-node";
-import { generatePlan, CalendarAction } from "@/lib/planner";
-import { getUserCalendarList } from "@/lib/googleCalendar"; 
+import { generatePlan, CalendarAction } from "../../../lib/planner";
+import { getUserCalendarList } from "../../../lib/googleCalendar"; 
 import { ZodError } from "zod";
-import { executePlan } from "@/lib/chatController"; // Import the new controller function
+import { executePlan } from "../../../lib/chatController"; // Import the new controller function
 
 export async function POST(req: NextRequest) {
   // 1. Get and verify Clerk session token

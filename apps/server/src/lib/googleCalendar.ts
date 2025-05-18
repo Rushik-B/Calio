@@ -1,5 +1,5 @@
 import { google, calendar_v3 } from 'googleapis';
-import { logAuditEvent } from '../lib/auditLog';
+import { logAuditEvent } from './auditLog';
 import { Prisma } from '@prisma/client';
 
 /**

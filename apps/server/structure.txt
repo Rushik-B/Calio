@@ -2,11 +2,7 @@
 
 
 .
-├── EVENT_CREATION_FLOW.md
-├── OVERVIEW.md
-├── Plan.md
 ├── README.md
-├── TO-DO-PROMPTS.md
 ├── extras
 │   └── flowchart-event-creation.svg
 ├── next-env.d.ts
@@ -56,13 +52,15 @@
 │   │   ├── chatController.ts
 │   │   ├── eventAnalyzer.ts
 │   │   ├── eventCreatorLLM.ts
+│   │   ├── eventDeleterLLM.ts
 │   │   ├── generalChatHandler.ts
 │   │   ├── googleCalendar.ts
 │   │   ├── planner.ts
 │   │   └── prisma.ts
 │   ├── prompts
 │   │   ├── calendar.md
-│   │   └── eventCreatorPrompt.md
+│   │   ├── eventCreatorPrompt.md
+│   │   └── eventDeleterPrompt.md
 │   └── types
 ├── structure.txt
 ├── tailwind.config.ts

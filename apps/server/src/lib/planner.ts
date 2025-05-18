@@ -86,9 +86,18 @@ export interface CreateEventIntentParams {
   calendarId?: string;
 }
 
+export interface DeleteEventIntentParams {
+  userInput: string;
+  userTimezone: string;
+  calendarId?: string; // Calendar ID if planner can determine it
+  timeMin?: string;    // Optional: From planner for scoping event search
+  timeMax?: string;    // Optional: From planner for scoping event search
+  query?: string;      // Optional: From planner for scoping event search
+}
+
 export type CalendarAction = {
     action: "create_event" | "list_events" | "update_event" | "delete_event" | "general_chat";
-    params?: CalendarActionParams | CreateEventIntentParams;
+    params?: CalendarActionParams | CreateEventIntentParams | DeleteEventIntentParams;
     speakableToolResponse?: string;
 };
 
@@ -204,6 +213,19 @@ export async function generatePlan(
                         userInput: userInput,
                         userTimezone: userTimezone,
                         calendarId: validatedParams.calendarId 
+                    }
+                };
+            } else if (determinedAction === "delete_event") {
+                console.log(`[Planner] Action type 'delete_event' identified. Passing to specialized Event Deleter LLM logic.`);
+                return {
+                    action: "delete_event",
+                    params: { // DeleteEventIntentParams for the downstream service
+                        userInput: userInput,
+                        userTimezone: userTimezone,
+                        calendarId: validatedParams.calendarId,
+                        timeMin: validatedParams.timeMin,
+                        timeMax: validatedParams.timeMax,
+                        query: validatedParams.query
                     }
                 };
             } else if (determinedAction === "general_chat") {
