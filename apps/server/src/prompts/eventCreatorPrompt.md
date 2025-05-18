@@ -24,12 +24,17 @@ A valid JSON array `[]`. Each element in the array must be a JSON object represe
     *   If `userInput` implies a duration (e.g., "for 1 hour", "from 2 to 3 pm"), calculate the end time. 
     *   If no duration is specified for a timed event, assume a **1-hour duration** by default, unless the context strongly implies otherwise (e.g., a simple reminder might be shorter).
     *   For all-day events, the `end.date` should typically be the day *after* the `start.date` if it's a single all-day event. If the user says "all day Tuesday", `start.date` is Tuesday, `end.date` is Wednesday.
-*   `calendarId` (string, optional): The ID of the calendar to create the event on. Choose from the `userCalendarList` if a specific calendar is mentioned (e.g., "work calendar", "put this on my Work calendar"). If not specified or ambiguous, you can omit this field or use `"primary"`.
+*   `calendarId` (string, optional): The ID of the calendar to create the event on.
+    *   **Priority for Selection:**
+        1.  **Explicit Mention:** If the user explicitly mentions a calendar by name (e.g., "put this on my work calendar", "schedule it on Personal"), use the ID of that calendar from `userCalendarList`.
+        2.  **Implicit Context:** If the event summary or description (e.g., "Work session", "Project Alpha Meeting", "Personal Appointment") strongly matches the name of a calendar in `userCalendarList` (e.g., a calendar named "Work", "Project Alpha", or "Personal"), you **SHOULD** use the ID of that matching calendar. For example, if the summary is "Work" and there's a calendar named "Work" in `userCalendarList`, use its ID.
+        3.  **ID Usage:** When assigning a calendar based on the above, you **MUST** use the 'ID' value from the corresponding entry in `userCalendarList`. For instance, if `userCalendarList` includes `(Name: "Work", ID: "actual_work_id@example.com")`, and you decide to place an event on the "Work" calendar, the `calendarId` field in your JSON output **MUST** be `"actual_work_id@example.com"`, NOT `"Work"`.
+        4.  **Default/Primary:** If no specific calendar is explicitly mentioned or clearly implied by context/name matching as described above, you can omit this field (to use the user's primary calendar) or explicitly use `"primary"` (which also refers to the user's main calendar ID).
 *   `attendees` (array of objects, optional): Each object `{"email": "user@example.com"}`. Extract email addresses if mentioned.
 *   `recurrence` (array of strings, optional): List of RRULE, EXRULE, RDATE, or EXDATE strings. E.g., `["RRULE:FREQ=DAILY;COUNT=5"]`. Generate this if the user implies a recurring event (e.g., "daily standups for next week", "meeting every Monday").
 *   `reminders` (object, optional):
-    *   `"useDefault": boolean` (optional)
-    *   `"overrides": [{"method": "email"|"popup", "minutes": number}]` (optional). Example: `"reminders": { "overrides": [{"method": "popup", "minutes": 30}] }` for a 30-minute popup reminder.
+    *   `"useDefault": boolean` (optional). If you are providing custom "overrides", you **MUST** include "useDefault": false in the reminders object.
+    *   `"overrides": [{"method": "email"|"popup", "minutes": number}]` (optional). Example: `"reminders": { "useDefault": false, "overrides": [{"method": "popup", "minutes": 30}] }` for a 30-minute popup reminder.
 *   `conferenceData` (object, optional): To request a new video conference.
     *   `"createRequest": { "requestId": "ANY_UNIQUE_STRING", "conferenceSolutionKey": { "type": "hangoutsMeet" } }` (Use a unique `requestId` for each event that needs a conference, e.g., by appending a counter or part of summary).
 *   `colorId` (string, optional): A numerical string (1-11) if color can be inferred.

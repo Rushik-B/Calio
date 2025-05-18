@@ -6,7 +6,7 @@
 
 generator client {
   provider      = "prisma-client-js"
-  output   = "../node_modules/@prisma/client"
+  output        = "../node_modules/@prisma/client"
   binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
@@ -16,26 +16,54 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  clerkUserId  String   @unique       // Store Clerk user.id here
-  email        String   @unique
-  name         String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id          String   @id @default(cuid())
+  clerkUserId String   @unique // Store Clerk user.id here
+  email       String   @unique
+  name        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  auditEvents  AuditEvent[]
+  auditEvents       AuditEvent[]
+  conversationTurns ConversationTurn[]
 }
 
 model AuditEvent {
   id        String   @id @default(cuid())
-  action    String   // e.g., "googleCalendar.createEvent", "user.login"
-  status    String   // e.g., "success", "failure", "pending"
-  requestId String?  // Optional correlation ID
-  payload   Json?    // Request/response details
+  action    String // e.g., "googleCalendar.createEvent", "user.login"
+  status    String // e.g., "success", "failure", "pending"
+  requestId String? // Optional correlation ID
+  payload   Json? // Request/response details
   error     String?
   timestamp DateTime @default(now())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 }
 
+model ConversationTurn {
+  id             String    @id @default(cuid())
+  conversationId String    @db.Uuid // To group turns of the same conversation
+  userId         String // Clerk User ID (maps to User model's id, not clerkUserId directly here for relation)
+  turnNumber     Int // Sequential turn number within a conversation
+  actor          ActorType // 'user' or 'assistant'
+  messageText    String    @db.Text
+  timestamp      DateTime  @default(now())
+
+  llmPrompt            String? @db.Text // For debugging
+  llmResponseRaw       String? @db.Text // For debugging
+  toolCalled           String?
+  toolParams           Json?
+  toolResult           Json? // Storing as JSON to accommodate various structures
+  clarificationContext Json? // Store context for follow-up questions
+  requiresFollowUp     Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([conversationId])
+  @@index([userId, conversationId, turnNumber])
+}
+
+enum ActorType {
+  USER
+  ASSISTANT
+}
