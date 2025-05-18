@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clerkClient } from "@clerk/clerk-sdk-node";
 import { generatePlan, CalendarAction } from "../../../lib/planner";
-import { getUserCalendarList } from "../../../lib/googleCalendar"; 
+import { getUserCalendarList, deleteEvent as apiDeleteEvent } from "../../../lib/googleCalendar"; 
 import { ZodError } from "zod";
 import { executePlan } from "../../../lib/chatController"; // Import the new controller function
 import prisma from "../../../lib/prisma"; // Import your Prisma client
@@ -9,7 +9,8 @@ import { v4 as uuidv4 } from 'uuid'; // For generating conversation_id
 import { Prisma } from "@prisma/client"; // Import Prisma namespace
 // Import for Central Orchestrator
 import { getNextAction } from "../../../lib/centralOrchestratorLLM";
-import { OrchestratorDecision } from "../../../types/orchestrator";
+import { OrchestratorDecision, OrchestratorActionType } from "../../../types/orchestrator";
+import { ExecutePlanResult, ClarificationNeededForDeletion } from "../../../lib/chatController"; // Import new types
 
 export async function POST(req: NextRequest) {
   // 1. Get and verify Clerk session token
@@ -121,17 +122,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON in request body." }, { status: 400 });
   }
 
-  // Fetch recent conversation history (not used directly in this step, but for future orchestrator)
+  // Fetch recent conversation history
   const orderedHistory = await prisma.conversationTurn.findMany({
     where: { conversationId: conversationId },
-    orderBy: { turnNumber: 'asc' }, // Chronological for orchestrator
-    take: 20 // Take more for better context, LLM can truncate if needed
+    orderBy: { turnNumber: 'asc' }, 
+    take: 20 
   });
 
+  // Determine userTurnNumber before first use
   const lastUserTurnInHistory = orderedHistory.filter(turn => turn.actor === 'USER').pop();
   const userTurnNumber = (lastUserTurnInHistory?.turnNumber || 0) + 1; 
 
-  // Log user's message
+  // Extract clarificationContext from the last assistant turn if it exists
+  const lastAssistantTurnWithContext = orderedHistory
+    .filter(turn => turn.actor === 'ASSISTANT' && turn.clarificationContext)
+    .pop();
+  const activeClarificationContext = lastAssistantTurnWithContext?.clarificationContext || null;
+  // Pass activeClarificationContext to getNextAction if its logic expects it,
+  // for now, getNextAction derives it from full history.
+
+  // Log user's message (moved here to ensure it's logged before orchestrator sees it in history for resolution)
   try {
     await prisma.conversationTurn.create({
       data: {
@@ -225,7 +235,13 @@ export async function POST(req: NextRequest) {
     try {
       const plannerInput = orchestratorDecision.params?.userInput || textInput;
       console.log(`[ChatRoute] Orchestrator directs to 'call_planner'. Input for planner: "${plannerInput}"`);
-      plan = await generatePlan(plannerInput, currentTimeISO, userTimezone, userCalendarsFormatted);
+      plan = await generatePlan(
+        plannerInput, 
+        currentTimeISO, 
+        userTimezone, 
+        userCalendarsFormatted,
+        orchestratorDecision.params
+      );
       assistantToolCalled = `planner->${plan?.action || 'unknown_plan_action'}`;
       assistantToolParams = plan?.params as Prisma.InputJsonValue | undefined;
     } catch (error: unknown) {
@@ -262,14 +278,64 @@ export async function POST(req: NextRequest) {
 
     try {
       console.log(`[ChatRoute] Planner generated plan: ${plan.action}, params:`, plan.params);
-      const executionResult = await executePlan({
+      const executionResult: ExecutePlanResult = await executePlan({
         plan, userId, googleAccessToken, explicitCalendarId, selectedCalendarIds, userTimezone,
         textInput: orchestratorDecision.params?.userInput || textInput, 
         userCalendarsFormatted, currentTimeISO
       });
 
-      finalAssistantResponseMessage = executionResult;
-      assistantMessageForDb = executionResult;
+      // Check if executePlan signals clarification is needed (Phase 2 entry point)
+      if (typeof executionResult === 'object' && executionResult.type === 'clarification_needed_for_deletion') {
+        console.log("[ChatRoute] Clarification needed for deletion. Candidates:", executionResult.candidates);
+        const clarificationInputForOrchestrator = `SYSTEM_CLARIFICATION_REQUEST: Original query was \"${executionResult.originalQuery}\". Found ambiguous events. Candidates: ${JSON.stringify(executionResult.candidates)}. Ask user to select.`;
+        
+        const currentUserTurnForHistory = {
+            id: uuidv4(),
+            conversationId: conversationId,
+            userId: internalUserId,
+            turnNumber: userTurnNumber, 
+            actor: 'USER' as const, 
+            messageText: textInput, 
+            timestamp: new Date(),
+            llmPrompt: null,
+            llmResponseRaw: null,
+            toolCalled: null,
+            toolParams: null,
+            toolResult: null,
+            clarificationContext: null,
+            requiresFollowUp: false,
+        };
+
+        const clarificationDecision = await getNextAction(
+          [...orderedHistory, currentUserTurnForHistory], 
+          clarificationInputForOrchestrator, 
+          userTimezone,
+          userCalendarsFormatted,
+          true 
+        );
+        finalAssistantResponseMessage = clarificationDecision.responseText || "Please clarify which item you meant.";
+        assistantMessageForDb = finalAssistantResponseMessage;
+        assistantToolCalled = clarificationDecision.actionType; // Should be 'ask_user_clarification_for_tool_ambiguity'
+        assistantToolParams = clarificationDecision.params as Prisma.InputJsonValue;
+        assistantLlmPrompt = clarificationDecision.reasoning;
+        assistantClarificationContext = clarificationDecision.clarificationContextToSave as Prisma.InputJsonValue;
+        assistantRequiresFollowUp = true; // Clarification always requires follow-up
+
+        await prisma.conversationTurn.create({
+          data: {
+            conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+            actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: assistantToolCalled, 
+            toolParams: assistantToolParams, toolResult: { originalCandidates: executionResult.candidates } as Prisma.InputJsonValue, 
+            requiresFollowUp: assistantRequiresFollowUp, clarificationContext: assistantClarificationContext, // This is IMPORTANT: save context from clarificationDecision
+            llmPrompt: assistantLlmPrompt
+          }
+        });
+        return NextResponse.json({ message: finalAssistantResponseMessage, conversationId: conversationId });
+      }
+
+      // If not clarification, then executionResult is a string
+      finalAssistantResponseMessage = executionResult as string;
+      assistantMessageForDb = executionResult as string;
       assistantToolResult = { text: executionResult } as Prisma.InputJsonValue;
       
       await prisma.conversationTurn.create({
@@ -312,6 +378,55 @@ export async function POST(req: NextRequest) {
         if (error instanceof ZodError) responseErrorBody.details = error.format();
         return NextResponse.json(responseErrorBody, { status: (error instanceof ZodError) ? 400 : 500 });
     }
+  } else if (orchestratorDecision.actionType === 'perform_google_calendar_action') {
+    console.log("[ChatRoute] Orchestrator directs to 'perform_google_calendar_action'. Params:", orchestratorDecision.params);
+    let actionSuccess = true;
+    let actionMessages: string[] = [];
+
+    if (orchestratorDecision.params?.GCToolName === 'delete_event_direct') {
+      const eventsToDelete = orchestratorDecision.params.GCToolArgs as Array<{eventId: string, calendarId: string, summary?: string}>;
+      if (eventsToDelete && eventsToDelete.length > 0) {
+        for (const event of eventsToDelete) {
+          try {
+            const deleted = await apiDeleteEvent(userId, googleAccessToken, event.calendarId, event.eventId);
+            if (deleted) {
+              actionMessages.push(`Successfully deleted event: ${event.summary || event.eventId}`);
+            } else {
+              actionMessages.push(`Failed to delete event: ${event.summary || event.eventId}. It might not exist or an error occurred.`);
+              actionSuccess = false;
+            }
+          } catch (gcError: any) {
+            actionMessages.push(`Error deleting event ${event.summary || event.eventId}: ${gcError.message}`);
+            actionSuccess = false;
+          }
+        }
+      } else {
+        actionMessages.push("No specific events were identified for deletion based on your choice.");
+      }
+    } else {
+      actionMessages.push(`Unknown GCToolName: ${orchestratorDecision.params?.GCToolName}`);
+      actionSuccess = false;
+    }
+
+    finalAssistantResponseMessage = orchestratorDecision.responseText || actionMessages.join('\n') || "Action processed.";
+    assistantMessageForDb = finalAssistantResponseMessage;
+    assistantToolCalled = `direct_gc_action->${orchestratorDecision.params?.GCToolName}`;
+    assistantToolParams = orchestratorDecision.params?.GCToolArgs as Prisma.InputJsonValue;
+    assistantToolResult = { summary: actionMessages.join('\n'), success: actionSuccess } as Prisma.InputJsonValue;
+    assistantRequiresFollowUp = false;
+    assistantClarificationContext = undefined; // Use undefined instead of null
+    assistantLlmPrompt = orchestratorDecision.reasoning;
+
+    await prisma.conversationTurn.create({
+      data: {
+        conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+        actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: assistantToolCalled,
+        toolParams: assistantToolParams, toolResult: assistantToolResult, requiresFollowUp: assistantRequiresFollowUp,
+        clarificationContext: assistantClarificationContext, llmPrompt: assistantLlmPrompt
+      }
+    });
+    return NextResponse.json({ message: finalAssistantResponseMessage, conversationId: conversationId });
+
   } else {
     console.error("[ChatRoute] Unknown orchestrator action type:", orchestratorDecision.actionType);
     finalAssistantResponseMessage = "Sorry, I encountered an unexpected internal state.";

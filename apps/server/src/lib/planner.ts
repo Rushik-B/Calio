@@ -93,6 +93,7 @@ export interface DeleteEventIntentParams {
   timeMin?: string;    // Optional: From planner for scoping event search
   timeMax?: string;    // Optional: From planner for scoping event search
   query?: string;      // Optional: From planner for scoping event search
+  originalRequestNature?: "singular" | "plural_or_unspecified"; // Hint from orchestrator
 }
 
 export type CalendarAction = {
@@ -105,7 +106,8 @@ export async function generatePlan(
   userInput: string,
   currentTimeISO: string,
   userTimezone: string,
-  userCalendarsFormatted?: string
+  userCalendarsFormatted?: string,
+  orchestratorParams?: { originalRequestNature?: "singular" | "plural_or_unspecified"; [key: string]: any } // Added to receive orchestrator hints
 ): Promise<CalendarAction | null> {
   let calendarSystemPrompt = await fsPromises.readFile(calendarSystemPromptPath, 'utf-8');
   
@@ -225,7 +227,8 @@ export async function generatePlan(
                         calendarId: validatedParams.calendarId,
                         timeMin: validatedParams.timeMin,
                         timeMax: validatedParams.timeMax,
-                        query: validatedParams.query
+                        query: validatedParams.query,
+                        originalRequestNature: orchestratorParams?.originalRequestNature // Pass the hint
                     }
                 };
             } else if (determinedAction === "general_chat") {

@@ -31,7 +31,36 @@ interface ChatControllerParams {
   currentTimeISO: string;
 }
 
-export async function executePlan(params: ChatControllerParams): Promise<string> {
+// Define a more specific type for the events we expect to process (from eventDeleterLLM)
+interface DeletionCandidateFromLLM {
+  eventId: string;
+  calendarId: string;
+  summary?: string;
+  reasoningForDeletion?: string;
+}
+
+// Refined to match calendar_v3.Schema$Event more closely for used fields
+interface EventToConsider extends Omit<calendar_v3.Schema$Event, 'id' | 'summary' | 'start'> {
+  id?: string | null; // id can be null or undefined in calendar_v3.Schema$Event
+  summary?: string | null;
+  start?: calendar_v3.Schema$EventDateTime | null;
+  calendarId: string; // This is added when eventsToConsiderForDeletion is populated
+}
+
+export interface ClarificationNeededForDeletion {
+  type: 'clarification_needed_for_deletion';
+  originalQuery: string;
+  candidates: Array<{
+    eventId: string;
+    calendarId: string;
+    summary?: string | null;
+    startTime?: string | null; // Formatted start time for user display
+  }>;
+}
+
+export type ExecutePlanResult = string | ClarificationNeededForDeletion;
+
+export async function executePlan(params: ChatControllerParams): Promise<ExecutePlanResult> {
   const { 
     plan, 
     userId, 
@@ -44,7 +73,7 @@ export async function executePlan(params: ChatControllerParams): Promise<string>
     currentTimeISO 
   } = params;
 
-  let toolResult: string;
+  let toolResult: ExecutePlanResult;
 
   if (plan.action !== 'create_event' && plan.action !== 'delete_event' && explicitCalendarId && plan.params) {
     (plan.params as any).calendarId = explicitCalendarId || (plan.params as any).calendarId;
@@ -206,7 +235,7 @@ export async function executePlan(params: ChatControllerParams): Promise<string>
       console.log(`[ChatController] Calling EventDeleterLLM with ${eventsToConsiderForDeletion.length} events.`);
       console.log("[ChatController] Events being sent to EventDeleterLLM for evaluation:", JSON.stringify(eventsToConsiderForDeletion, null, 2));
 
-      const eventJSONsToDelete = await generateEventDeletionJSONs({
+      const eventJSONsToDelete: DeletionCandidateFromLLM[] = await generateEventDeletionJSONs({
         userInput: deleteIntentParams.userInput,
         userTimezone: userTimezone,
         eventList: eventsToConsiderForDeletion,
@@ -214,11 +243,48 @@ export async function executePlan(params: ChatControllerParams): Promise<string>
         currentTimeISO: currentTimeISO
       });
 
+      const userFriendlyCandidates = eventsToConsiderForDeletion.map(e => ({
+        eventId: e.id || 'unknown-id',
+        calendarId: e.calendarId,
+        summary: e.summary,
+        startTime: e.start?.dateTime || e.start?.date || 'N/A'
+      }));
+
+      // Scenario 1: Orchestrator thought it was singular, but EventDeleterLLM (surprisingly) found multiple *specific* matches.
+      if (deleteIntentParams.originalRequestNature === "singular" && eventJSONsToDelete && eventJSONsToDelete.length > 1) {
+        console.log(`[ChatController] Ambiguity: Singular request, but EventDeleterLLM identified ${eventJSONsToDelete.length} events.`);
+        return {
+          type: 'clarification_needed_for_deletion',
+          originalQuery: deleteIntentParams.userInput,
+          candidates: eventJSONsToDelete.map(e => ({
+              eventId: e.eventId,
+              calendarId: e.calendarId,
+              summary: e.summary,
+              startTime: eventsToConsiderForDeletion.find(etc => etc.id === e.eventId)?.start?.dateTime || eventsToConsiderForDeletion.find(etc => etc.id === e.eventId)?.start?.date || 'N/A'
+          }))
+        };
+      }
+
+      // Scenario 2: EventDeleterLLM returned empty (was unsure), BUT there *were* events in the time range it could have picked from.
+      // This is the case from the user's log.
+      if ((!eventJSONsToDelete || eventJSONsToDelete.length === 0) && eventsToConsiderForDeletion.length > 0) {
+        console.log(`[ChatController] Ambiguity: EventDeleterLLM unsure, but ${eventsToConsiderForDeletion.length} potential candidates existed.`);
+        // For this scenario, we present ALL events that were initially considered, as the EventDeleterLLM didn't narrow them down.
+        return {
+          type: 'clarification_needed_for_deletion',
+          originalQuery: deleteIntentParams.userInput,
+          candidates: userFriendlyCandidates
+        };
+      }
+      
+      // Original logic for when EventDeleterLLM confidently returns 0 events and there truly were none to begin with, or it successfully identifies events.
       if (!eventJSONsToDelete || eventJSONsToDelete.length === 0) {
-        // Check if the user's input seemed specific, suggesting they expected particular events to be found.
+        // This block now primarily handles cases where eventsToConsiderForDeletion was also empty, 
+        // or if EventDeleterLLM justifiably found nothing specific to delete from a non-empty list (e.g. user query didn't match anything)
+        // but this should be less common if the above clarification catches most ambiguities.
         const userInputLower = deleteIntentParams.userInput.toLowerCase();
         const hasNumbers = /\d+/.test(userInputLower);
-        const hasQuotes = /["'“]/.test(userInputLower);
+        const hasQuotes = /["'""]/.test(userInputLower);
         const keywordsLikeEventTest = /\b(event|test|meeting|appointment|task)\b/i.test(userInputLower);
 
         if ((hasNumbers && keywordsLikeEventTest) || hasQuotes) {
