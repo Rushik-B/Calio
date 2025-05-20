@@ -21,7 +21,8 @@ interface EventWithCalendarId extends calendar_v3.Schema$Event {
 
 interface ChatControllerParams {
   plan: CalendarAction;
-  userId: string;
+  internalDbUserId: string;
+  clerkUserId: string;
   googleAccessToken: string;
   explicitCalendarId?: string;
   selectedCalendarIds?: string[];
@@ -47,6 +48,18 @@ interface EventToConsider extends Omit<calendar_v3.Schema$Event, 'id' | 'summary
   calendarId: string; // This is added when eventsToConsiderForDeletion is populated
 }
 
+export interface CreatedEventDetails {
+  id: string;
+  summary: string | null;
+  htmlLink: string | null;
+  description: string | null;
+  location: string | null;
+  start: calendar_v3.Schema$EventDateTime | null;
+  end: calendar_v3.Schema$EventDateTime | null;
+  calendarId: string;
+  // Any other fields you want to ensure are available from the event details
+}
+
 export interface ClarificationNeededForDeletion {
   type: 'clarification_needed_for_deletion';
   originalQuery: string;
@@ -58,12 +71,25 @@ export interface ClarificationNeededForDeletion {
   }>;
 }
 
-export type ExecutePlanResult = string | ClarificationNeededForDeletion;
+export interface ClarificationNeededForTimeRange {
+  type: 'clarification_needed_for_time_range';
+  originalQuery: string;
+  attemptedTimeMin?: string; 
+  attemptedTimeMax?: string; 
+}
+
+export interface CreateEventExecutionResult {
+  userMessage: string;
+  createdEventsDetails: CreatedEventDetails[]; 
+}
+
+export type ExecutePlanResult = string | ClarificationNeededForDeletion | CreateEventExecutionResult | ClarificationNeededForTimeRange;
 
 export async function executePlan(params: ChatControllerParams): Promise<ExecutePlanResult> {
   const { 
     plan, 
-    userId, 
+    internalDbUserId,
+    clerkUserId,
     googleAccessToken, 
     explicitCalendarId, 
     selectedCalendarIds, 
@@ -73,7 +99,7 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
     currentTimeISO 
   } = params;
 
-  let toolResult: ExecutePlanResult;
+  let toolResult: ExecutePlanResult = "";
 
   if (plan.action !== 'create_event' && plan.action !== 'delete_event' && explicitCalendarId && plan.params) {
     (plan.params as any).calendarId = explicitCalendarId || (plan.params as any).calendarId;
@@ -105,8 +131,9 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
         break;
       }
 
-      const creationResults: string[] = [];
-      const createTool = new CreateEventTool(userId, googleAccessToken);
+      const creationResultsMessages: string[] = [];
+      const createdEventsDetailsList: CreatedEventDetails[] = [];
+      const createTool = new CreateEventTool(clerkUserId, googleAccessToken);
 
       for (const eventData of eventJSONsToCreate) {
         try {
@@ -114,8 +141,25 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
             ...eventData,
             calendarId: eventData.calendarId || createIntentParams.calendarId || 'primary'
           };
-          const singleCreationResult = await createTool.call(finalEventDataForTool);
-          creationResults.push(singleCreationResult);
+          const singleCreationResultString = await createTool.call(finalEventDataForTool);
+          const parsedResult = JSON.parse(singleCreationResultString);
+
+          if (parsedResult.details) {
+            createdEventsDetailsList.push({
+              id: parsedResult.details.id,
+              summary: parsedResult.details.summary,
+              htmlLink: parsedResult.details.htmlLink,
+              description: finalEventDataForTool.description || null, // from input to tool
+              location: finalEventDataForTool.location || null,     // from input to tool
+              start: parsedResult.details.start,            // from GCal API response
+              end: parsedResult.details.end,                // from GCal API response
+              calendarId: parsedResult.details.calendarId     // from GCal API response (or default)
+            });
+            creationResultsMessages.push(parsedResult.message); 
+          } else {
+            creationResultsMessages.push(parsedResult.message || "Failed to create an event due to an unknown issue.");
+          }
+
         } catch (error) {
           let errorMsg = "Failed to create one of the events.";
           if (error instanceof ZodError) {
@@ -125,17 +169,24 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
             console.error("[ChatController] Error creating event with data:", JSON.stringify(eventData, null, 2), error);
             errorMsg = `Error creating event '${eventData.summary || "(unknown summary)"}': ${error.message}`;
           }
-          creationResults.push(errorMsg);
+          creationResultsMessages.push(errorMsg);
         }
       }
-      toolResult = creationResults.join("\n\n");
-      break;
+      // toolResult = creationResults.join("\n\n");
+      return {
+        userMessage: creationResultsMessages.join("\n\n"),
+        createdEventsDetails: createdEventsDetailsList
+      };
     case "list_events":
       const parsedListParams = listEventsParamsSchema.parse(plan.params || {});
-      let calendarToListFrom = explicitCalendarId || parsedListParams.calendarId;
+      const effectiveCalendarId = explicitCalendarId || parsedListParams.calendarId || 'primary'; 
+      const effectiveTimeZone = parsedListParams.timeZone || userTimezone;
+
+      let fetchedEvents: EventWithCalendarId[] = []; 
 
       if (selectedCalendarIds && selectedCalendarIds.length > 0 && !explicitCalendarId) {
-        const allFetchedEvents: EventWithCalendarId[] = [];
+        // Multi-calendar: Fetch events from all selected calendars
+        console.log(`[ChatController] Multi-calendar list_events for calendars: ${selectedCalendarIds.join(', ')} using timezone: ${effectiveTimeZone}`);
         const optionsBase: Omit<calendar_v3.Params$Resource$Events$List, 'calendarId' | 'timeZone'> = {
           q: parsedListParams.query,
           timeMin: parsedListParams.timeMin,
@@ -144,50 +195,76 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
           orderBy: "startTime",
         };
         for (const calId of selectedCalendarIds) {
-          const eventsFromCal = await apiListEvents(userId, googleAccessToken, calId, { ...optionsBase, timeZone: userTimezone });
+          const eventsFromCal = await apiListEvents(clerkUserId, googleAccessToken, calId, { ...optionsBase, timeZone: effectiveTimeZone });
           if (eventsFromCal) {
-            eventsFromCal.forEach(event => allFetchedEvents.push({ ...event, calendarId: calId }));
-          }
-        }
-        console.log(`[ChatController] Total events fetched for list_events (multi-calendar): ${allFetchedEvents.length}`);
-        if (parsedListParams.questionAboutEvents) {
-          if (allFetchedEvents.length > 0) {
-            const eventContextForLLM = allFetchedEvents.map(item => 
-              `Calendar: ${item.calendarId}\nEvent: ${item.summary || 'N/A'}\nStart: ${item.start?.dateTime || item.start?.date || 'N/A'}\nEnd: ${item.end?.dateTime || item.end?.date || 'N/A'}`
-            ).join("\n---\n");
-            toolResult = await handleEventAnalysis(parsedListParams.questionAboutEvents, eventContextForLLM);
-          } else {
-            toolResult = `No events found across selected calendars for the period to answer your question: "${parsedListParams.questionAboutEvents}"`;
-          }
-        } else {
-          if (allFetchedEvents.length > 0) {
-              const eventsStringArray = selectedCalendarIds.map(calId => {
-                  const eventsFromThisCal = allFetchedEvents.filter(item => item.calendarId === calId);
-                  if (eventsFromThisCal.length === 0) return null;
-                  return `From calendar '${calId}': ${eventsFromThisCal
-                      .map(item => `ID: ${item.id}, Summary: ${item.summary}, Start: ${item.start?.dateTime || item.start?.date}`)
-                      .join("; ")}`;
-              }).filter(str => str !== null);
-              toolResult = `Found ${allFetchedEvents.length} event(s) across ${selectedCalendarIds.length} calendar(s):\n${eventsStringArray.join("\n")}`;
-          } else {
-            toolResult = "No events found matching your criteria across the selected calendars.";
+            eventsFromCal.forEach(event => fetchedEvents.push({ ...event, calendarId: calId }));
           }
         }
       } else {
-        const listTool = new ListEventsTool(userId, googleAccessToken);
-        const paramsForTool = { ...parsedListParams, calendarId: calendarToListFrom, timeZone: parsedListParams.timeZone || userTimezone };
-        if (parsedListParams.questionAboutEvents) {
-           console.log(`[ChatController] Analytical question for single calendar '${calendarToListFrom}'. Using ListEventsTool.`);
-           toolResult = await listTool.call(paramsForTool);
+        // Single-calendar: Use ListEventsTool
+        console.log(`[ChatController] Single-calendar list_events for calendar: ${effectiveCalendarId} using timezone: ${effectiveTimeZone}`);
+        const listTool = new ListEventsTool(clerkUserId, googleAccessToken);
+        const paramsForTool = { 
+          ...parsedListParams, 
+          calendarId: effectiveCalendarId, 
+          timeZone: effectiveTimeZone 
+        };
+        
+        const toolOutput = await listTool.call(paramsForTool);
+
+        if (Array.isArray(toolOutput)) { // Events array returned (questionAboutEvents was present)
+           fetchedEvents = toolOutput.map(event => ({ ...event, calendarId: effectiveCalendarId } as EventWithCalendarId));
+        } else if (typeof toolOutput === 'string' && !parsedListParams.questionAboutEvents) {
+          // Summary string returned (no questionAboutEvents)
+          toolResult = toolOutput;
+          break; // Skip further processing
+        } else if (typeof toolOutput === 'string' && parsedListParams.questionAboutEvents) {
+          if(toolOutput.startsWith("Failed to list events") || toolOutput.startsWith("No events found")) {
+             toolResult = toolOutput; 
+             break; 
+          }
+          console.warn("[ChatController] ListEventsTool returned an unexpected string when a question was asked. Output:", toolOutput);
+          fetchedEvents = []; 
+        }
+      }
+
+      // --- Consistent Analysis or Summary --- 
+      if (parsedListParams.questionAboutEvents) {
+        if (fetchedEvents.length > 0) {
+          const eventContextForLLM = fetchedEvents.map(item => 
+            `Calendar: ${item.calendarId}\nEvent: ${item.summary || 'N/A'}\nStart: ${item.start?.dateTime || item.start?.date || 'N/A'}\nEnd: ${item.end?.dateTime || item.end?.date || 'N/A'}${item.description ? `\nDescription: ${item.description}`: ''}`
+          ).join("\n---\n");
+          console.log(`[ChatController] Calling handleEventAnalysis for question: "${parsedListParams.questionAboutEvents}" with ${fetchedEvents.length} events using timezone ${effectiveTimeZone}.`);
+          toolResult = await handleEventAnalysis(parsedListParams.questionAboutEvents, eventContextForLLM, effectiveTimeZone);
         } else {
-          toolResult = await listTool.call(paramsForTool); 
+          // toolResult might have been set by ListEventsTool returning "No events found..."
+          // Only set a new message if toolResult is still its initial empty string or was not a specific "no events" message.
+          if (toolResult === "" || !toolResult.includes("No events found")) {
+            toolResult = `No events found for the period to answer your question: "${parsedListParams.questionAboutEvents}".`;
+          }
+        }
+      } else {
+        if (toolResult === "") { // Only if not already set by single-calendar direct string output or error
+            if (fetchedEvents.length > 0) {
+                const calsRepresented = Array.from(new Set(fetchedEvents.map(e => e.calendarId))); // Correctly convert Set to Array
+                const eventsStringArray = calsRepresented.map(calId => {
+                    const eventsFromThisCal = fetchedEvents.filter(item => item.calendarId === calId);
+                    if (eventsFromThisCal.length === 0) return null;
+                    return `From calendar '${calId}': ${eventsFromThisCal
+                        .map(item => `ID: ${item.id || 'N/A'}, Summary: ${item.summary || 'N/A'}, Start: ${item.start?.dateTime || item.start?.date || 'N/A'}`)
+                        .join("; ")}`;
+                }).filter(str => str !== null);
+                toolResult = `Found ${fetchedEvents.length} event(s) across ${calsRepresented.length} calendar(s):\n${eventsStringArray.join("\n")}`;
+            } else {
+              toolResult = "No events found matching your criteria.";
+            }
         }
       }
       break;
     case "update_event":
       const updateParams = updateEventParamsSchema.parse(plan.params);
       updateParams.calendarId = explicitCalendarId || updateParams.calendarId;
-      const updateTool = new UpdateEventTool(userId, googleAccessToken);
+      const updateTool = new UpdateEventTool(clerkUserId, googleAccessToken);
       toolResult = await updateTool.call(updateParams);
       break;
     case "delete_event":
@@ -221,15 +298,20 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
 
       for (const calId of targetCalendarIdsForDelete) {
         console.log(`[ChatController] Fetching events from calendar '${calId}' to consider for deletion.`);
-        const eventsFromCal = await apiListEvents(userId, googleAccessToken, calId, { ...listOptions, timeZone: userTimezone });
+        const eventsFromCal = await apiListEvents(clerkUserId, googleAccessToken, calId, { ...listOptions, timeZone: userTimezone });
         if (eventsFromCal) {
           eventsFromCal.forEach(event => eventsToConsiderForDeletion.push({ ...event, calendarId: calId }));
         }
       }
 
       if (eventsToConsiderForDeletion.length === 0) {
-        toolResult = "No events found in the specified calendar(s) and time range to consider for deletion.";
-        break;
+        console.log(`[ChatController] No events found in the specified time range to consider for deletion. Query: "${deleteIntentParams.userInput}", TimeMin: ${deleteIntentParams.timeMin}, TimeMax: ${deleteIntentParams.timeMax}`);
+        return {
+          type: 'clarification_needed_for_time_range',
+          originalQuery: deleteIntentParams.userInput,
+          attemptedTimeMin: deleteIntentParams.timeMin,
+          attemptedTimeMax: deleteIntentParams.timeMax
+        };
       }
 
       console.log(`[ChatController] Calling EventDeleterLLM with ${eventsToConsiderForDeletion.length} events.`);
@@ -250,7 +332,6 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
         startTime: e.start?.dateTime || e.start?.date || 'N/A'
       }));
 
-      // Scenario 1: Orchestrator thought it was singular, but EventDeleterLLM (surprisingly) found multiple *specific* matches.
       if (deleteIntentParams.originalRequestNature === "singular" && eventJSONsToDelete && eventJSONsToDelete.length > 1) {
         console.log(`[ChatController] Ambiguity: Singular request, but EventDeleterLLM identified ${eventJSONsToDelete.length} events.`);
         return {
@@ -265,11 +346,8 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
         };
       }
 
-      // Scenario 2: EventDeleterLLM returned empty (was unsure), BUT there *were* events in the time range it could have picked from.
-      // This is the case from the user's log.
       if ((!eventJSONsToDelete || eventJSONsToDelete.length === 0) && eventsToConsiderForDeletion.length > 0) {
         console.log(`[ChatController] Ambiguity: EventDeleterLLM unsure, but ${eventsToConsiderForDeletion.length} potential candidates existed.`);
-        // For this scenario, we present ALL events that were initially considered, as the EventDeleterLLM didn't narrow them down.
         return {
           type: 'clarification_needed_for_deletion',
           originalQuery: deleteIntentParams.userInput,
@@ -277,43 +355,43 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
         };
       }
       
-      // Original logic for when EventDeleterLLM confidently returns 0 events and there truly were none to begin with, or it successfully identifies events.
       if (!eventJSONsToDelete || eventJSONsToDelete.length === 0) {
-        // This block now primarily handles cases where eventsToConsiderForDeletion was also empty, 
-        // or if EventDeleterLLM justifiably found nothing specific to delete from a non-empty list (e.g. user query didn't match anything)
-        // but this should be less common if the above clarification catches most ambiguities.
-        const userInputLower = deleteIntentParams.userInput.toLowerCase();
-        const hasNumbers = /\d+/.test(userInputLower);
-        const hasQuotes = /["'""]/.test(userInputLower);
-        const keywordsLikeEventTest = /\b(event|test|meeting|appointment|task)\b/i.test(userInputLower);
-
-        if ((hasNumbers && keywordsLikeEventTest) || hasQuotes) {
-          toolResult = `I looked for events matching your description ("${deleteIntentParams.userInput}") in the timeframe, but I couldn't pinpoint the exact one(s) you want to delete. Could you please provide a more specific name, part of the description, or the event ID?`;
-        } else {
-          toolResult = "I couldn't identify any specific events to delete based on your request and the events found. Please try rephrasing or provide more details :)";
-        }
+        toolResult = `I looked for events matching your description ("${deleteIntentParams.userInput}") but couldn't pinpoint specific ones to delete.`;
         break;
       }
 
       const deletionResults: string[] = [];
+      const successfullyDeletedSummaries: string[] = [];
+      const failedToDeleteSummaries: string[] = [];
+      let allSucceeded = true;
+      let anySucceeded = false;
+
       for (const eventToDelete of eventJSONsToDelete) {
         if (!eventToDelete.eventId || !eventToDelete.calendarId) {
             console.warn("[ChatController] EventDeleterLLM provided an item without eventId or calendarId:", eventToDelete);
-            deletionResults.push(`Skipped deleting an event due to missing ID or calendar ID (Summary: ${eventToDelete.summary || 'N/A'}).`);
+            deletionResults.push(`Skipped deleting an event due to missing ID or calendar ID (Summary: ${eventToDelete.summary || 'N/A'}).`); 
+            failedToDeleteSummaries.push(eventToDelete.summary || eventToDelete.eventId || 'an event with missing details');
+            allSucceeded = false;
             continue;
         }
         try {
           if (!targetCalendarIdsForDelete.includes(eventToDelete.calendarId)) {
             console.warn(`[ChatController] EventDeleterLLM tried to delete from a non-target calendar ${eventToDelete.calendarId}. Skipping.`);
-            deletionResults.push(`Skipped deleting event '${eventToDelete.summary || eventToDelete.eventId}' as it was from an unexpected calendar.`);
+            deletionResults.push(`Skipped deleting event '${eventToDelete.summary || eventToDelete.eventId}' as it was from an unexpected calendar.`); 
+            failedToDeleteSummaries.push(eventToDelete.summary || eventToDelete.eventId);
+            allSucceeded = false;
             continue;
           }
-          const success = await apiDeleteEvent(userId, googleAccessToken, eventToDelete.calendarId, eventToDelete.eventId);
-          const reasoningText = eventToDelete.reasoningForDeletion ? ` Reason: ${eventToDelete.reasoningForDeletion}` : "";
+          const success = await apiDeleteEvent(clerkUserId, googleAccessToken, eventToDelete.calendarId, eventToDelete.eventId);
+          const reasoningText = eventToDelete.reasoningForDeletion ? ` Reason: ${eventToDelete.reasoningForDeletion}` : ""; 
           if (success) {
             deletionResults.push(`Successfully deleted event: ${eventToDelete.summary || eventToDelete.eventId} (ID: ${eventToDelete.eventId}) from calendar ${eventToDelete.calendarId}.${reasoningText}`);
+            successfullyDeletedSummaries.push(eventToDelete.summary || eventToDelete.eventId);
+            anySucceeded = true;
           } else {
             deletionResults.push(`Failed to delete event: ${eventToDelete.summary || eventToDelete.eventId} (ID: ${eventToDelete.eventId}) from calendar ${eventToDelete.calendarId}. It might not exist or an error occurred.${reasoningText}`);
+            failedToDeleteSummaries.push(eventToDelete.summary || eventToDelete.eventId);
+            allSucceeded = false;
           }
         } catch (error) {
           let errorMsg = `Error deleting event ${eventToDelete.summary || eventToDelete.eventId} (ID: ${eventToDelete.eventId}).`;
@@ -322,9 +400,26 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
           }
           console.error("[ChatController] Error calling apiDeleteEvent:", error);
           deletionResults.push(errorMsg);
+          failedToDeleteSummaries.push(eventToDelete.summary || eventToDelete.eventId);
+          allSucceeded = false;
         }
       }
-      toolResult = deletionResults.join("\n");
+
+      if (anySucceeded && allSucceeded) {
+        if (successfullyDeletedSummaries.length === 1) {
+          toolResult = `Okay, I've deleted '${successfullyDeletedSummaries[0]}' for you.`;
+        } else {
+          toolResult = `Alright, I've removed ${successfullyDeletedSummaries.length} events: ${successfullyDeletedSummaries.map(s => `'${s}'`).join(', ')}.`;
+        }
+      } else if (anySucceeded && !allSucceeded) {
+        let response = `Okay, I was able to delete: ${successfullyDeletedSummaries.map(s => `'${s}'`).join(', ')}.`;
+        if (failedToDeleteSummaries.length > 0) {
+          response += ` However, I couldn't remove: ${failedToDeleteSummaries.map(s => `'${s}'`).join(', ')}.`;
+        }
+        toolResult = response;
+      } else { 
+        toolResult = "I'm sorry, I wasn't able to delete the requested event(s) at this time. Please ensure the event details are correct or try again.";
+      }
       break;
     case "general_chat":
       toolResult = await handleGeneralChat(textInput);

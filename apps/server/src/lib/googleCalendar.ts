@@ -21,7 +21,7 @@ function getCalendarClient(accessToken: string): calendar_v3.Calendar {
  * @param options Optional parameters for listing events (e.g., timeMin, timeMax, q).
  * @returns A list of events or null if an error occurred.
  */
-export async function listEvents(userId: string, accessToken: string, calendarId: string = 'primary', options?: calendar_v3.Params$Resource$Events$List) {
+export async function listEvents(clerkUserIdForAudit: string, accessToken: string, calendarId: string = 'primary', options?: calendar_v3.Params$Resource$Events$List) {
     const action = 'calendar.listEvents';
     try {
         const calendar = getCalendarClient(accessToken);
@@ -31,7 +31,7 @@ export async function listEvents(userId: string, accessToken: string, calendarId
         });
         const events = response.data.items;
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'SUCCESS',
             payload: { calendarId, options: options ? JSON.stringify(options) : undefined, resultCount: events?.length } as Prisma.InputJsonObject,
@@ -40,7 +40,7 @@ export async function listEvents(userId: string, accessToken: string, calendarId
     } catch (error: unknown) {
         console.error('Error listing events:', error);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'FAILURE',
             payload: { calendarId, options: options ? JSON.stringify(options) : undefined } as Prisma.InputJsonObject,
@@ -58,7 +58,7 @@ export async function listEvents(userId: string, accessToken: string, calendarId
  * @param event The event object to insert.
  * @returns The created event object or null if an error occurred.
  */
-export async function insertEvent(userId: string, accessToken: string, calendarId: string = 'primary', event: calendar_v3.Schema$Event) {
+export async function insertEvent(clerkUserIdForAudit: string, accessToken: string, calendarId: string = 'primary', event: calendar_v3.Schema$Event) {
     const action = 'calendar.insertEvent';
     try {
         const calendar = getCalendarClient(accessToken);
@@ -70,7 +70,7 @@ export async function insertEvent(userId: string, accessToken: string, calendarI
         const createdEvent = response.data;
         console.log('Event created: %s', createdEvent.htmlLink);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'SUCCESS',
             payload: { calendarId, event: JSON.stringify(event), createdEventId: createdEvent.id } as Prisma.InputJsonObject,
@@ -79,7 +79,7 @@ export async function insertEvent(userId: string, accessToken: string, calendarI
     } catch (error: unknown) {
         console.error('Error inserting event:', error);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'FAILURE',
             payload: { calendarId, event: JSON.stringify(event) } as Prisma.InputJsonObject,
@@ -98,7 +98,7 @@ export async function insertEvent(userId: string, accessToken: string, calendarI
  * @param eventPatch The partial event object with fields to update.
  * @returns The updated event object or null if an error occurred.
  */
-export async function patchEvent(userId: string, accessToken: string, calendarId: string = 'primary', eventId: string, eventPatch: calendar_v3.Schema$Event) {
+export async function patchEvent(clerkUserIdForAudit: string, accessToken: string, calendarId: string = 'primary', eventId: string, eventPatch: calendar_v3.Schema$Event) {
     const action = 'calendar.patchEvent';
     try {
         const calendar = getCalendarClient(accessToken);
@@ -110,7 +110,7 @@ export async function patchEvent(userId: string, accessToken: string, calendarId
         const updatedEvent = response.data;
         console.log('Event updated: %s', updatedEvent.htmlLink);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'SUCCESS',
             payload: { calendarId, eventId, eventPatch: JSON.stringify(eventPatch), updatedEventId: updatedEvent.id } as Prisma.InputJsonObject,
@@ -119,7 +119,7 @@ export async function patchEvent(userId: string, accessToken: string, calendarId
     } catch (error: unknown) {
         console.error('Error patching event:', error);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'FAILURE',
             payload: { calendarId, eventId, eventPatch: JSON.stringify(eventPatch) } as Prisma.InputJsonObject,
@@ -137,7 +137,7 @@ export async function patchEvent(userId: string, accessToken: string, calendarId
  * @param eventId The ID of the event to delete.
  * @returns True if the event was deleted successfully, false otherwise.
  */
-export async function deleteEvent(userId: string, accessToken: string, calendarId: string = 'primary', eventId: string) {
+export async function deleteEvent(clerkUserIdForAudit: string, accessToken: string, calendarId: string = 'primary', eventId: string) {
     const action = 'calendar.deleteEvent';
     try {
         const calendar = getCalendarClient(accessToken);
@@ -147,7 +147,7 @@ export async function deleteEvent(userId: string, accessToken: string, calendarI
         });
         console.log('Event deleted: %s', eventId);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'SUCCESS',
             payload: { calendarId, eventId } as Prisma.InputJsonObject,
@@ -156,7 +156,7 @@ export async function deleteEvent(userId: string, accessToken: string, calendarI
     } catch (error: unknown) {
         console.error('Error deleting event:', error);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'FAILURE',
             payload: { calendarId, eventId } as Prisma.InputJsonObject,
@@ -172,7 +172,7 @@ export async function deleteEvent(userId: string, accessToken: string, calendarI
  * @param accessToken The user's Google OAuth 2.0 access token.
  * @returns A list of calendar objects or null if an error occurred.
  */
-export async function getUserCalendarList(userId: string, accessToken: string): Promise<calendar_v3.Schema$CalendarListEntry[] | null> {
+export async function getUserCalendarList(clerkUserIdForAudit: string, accessToken: string): Promise<calendar_v3.Schema$CalendarListEntry[] | null> {
     const action = 'calendar.listCalendarList'; // Action name for audit log
     try {
         const calendar = getCalendarClient(accessToken);
@@ -180,7 +180,7 @@ export async function getUserCalendarList(userId: string, accessToken: string): 
         const calendarList = response.data.items;
 
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'SUCCESS',
             payload: { resultCount: calendarList?.length } as Prisma.InputJsonObject,
@@ -195,7 +195,7 @@ export async function getUserCalendarList(userId: string, accessToken: string): 
     } catch (error: unknown) {
         console.error('Error fetching calendar list:', error);
         await logAuditEvent({
-            clerkUserId: userId,
+            clerkUserId: clerkUserIdForAudit,
             action,
             status: 'FAILURE',
             error: error instanceof Error ? error.message : String(error),

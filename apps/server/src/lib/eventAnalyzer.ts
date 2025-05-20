@@ -22,6 +22,7 @@ Based *only* on the calendar events provided in the user's message, answer their
 - Calculate durations, count events, or summarize information as relevant to the question.
 - If the events provided do not contain enough information to definitively answer the question, state that clearly.
 - Do not ask for clarification on date ranges or event details if the information is not present in the provided events; instead, indicate what information is missing based on the events at hand.
+- When referring to event times in your answer, present them in a natural way (e.g., "at 2:30 PM"). If you need to specify the timezone, use the provided user's timezone name (e.g., "America/Vancouver") rather than just the offset.
 - Present your answer clearly and concisely.
 `;
 
@@ -30,19 +31,23 @@ Based *only* on the calendar events provided in the user's message, answer their
  *
  * @param userQuestion The user's question about the events.
  * @param eventDataString A string containing the list of events, formatted for the LLM.
+ * @param userTimezone The IANA timezone name of the user (e.g., "America/Vancouver").
  * @returns A promise that resolves to the LLM's analytical response string.
  */
 export async function handleEventAnalysis(
   userQuestion: string,
-  eventDataString: string
+  eventDataString: string,
+  userTimezone: string
 ): Promise<string> {
-  console.log(`[EventAnalyzer] Received question: "${userQuestion}"`);
+  console.log(`[EventAnalyzer] Received question: "${userQuestion}" for timezone: ${userTimezone}`);
   // console.log(`[EventAnalyzer] Event data string: "${eventDataString}"`); // Log if needed for debugging, can be verbose
 
-  const constructedUserMessage = `User's Question: ${userQuestion}\n\nProvided Events:\n${eventDataString}`;
+  const systemMessage = new SystemMessage(ANALYSIS_SYSTEM_PROMPT.replace("{userTimezoneName}", userTimezone));
+
+  const constructedUserMessage = `User's Question: ${userQuestion}\n(Assume all event times are relevant to the user timezone: ${userTimezone})\n\nProvided Events:\n${eventDataString}`;
 
   const messages: BaseMessage[] = [
-    new SystemMessage(ANALYSIS_SYSTEM_PROMPT),
+    systemMessage,
     new HumanMessage(constructedUserMessage),
   ];
 

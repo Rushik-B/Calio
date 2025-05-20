@@ -205,6 +205,15 @@ export async function generatePlan(
             
             console.log(`[Planner] LLM determined action: ${determinedAction}`);
 
+            // If orchestrator provided timeMin/timeMax, use them directly, overriding LLM's extraction for these fields.
+            // This is crucial for "delete events just created" scenarios where orchestrator calculates the scope.
+            let finalParamsForAction = { ...validatedParams };
+            if (orchestratorParams?.timeMin && orchestratorParams?.timeMax && determinedAction === "delete_event") {
+                console.log(`[Planner] Overriding timeMin/timeMax with values from orchestrator: ${orchestratorParams.timeMin}, ${orchestratorParams.timeMax}`);
+                finalParamsForAction.timeMin = orchestratorParams.timeMin as string;
+                finalParamsForAction.timeMax = orchestratorParams.timeMax as string;
+            }
+
             if (determinedAction === "create_event") {
                 // If LLM says "create_event", we still pass to specialized Event Creator LLM
                 // The specialized LLM will handle parameter extraction for creation more robustly.
@@ -214,7 +223,7 @@ export async function generatePlan(
                     params: { // CreateEventIntentParams for the downstream service
                         userInput: userInput,
                         userTimezone: userTimezone,
-                        calendarId: validatedParams.calendarId 
+                        calendarId: finalParamsForAction.calendarId 
                     }
                 };
             } else if (determinedAction === "delete_event") {
@@ -224,10 +233,10 @@ export async function generatePlan(
                     params: { // DeleteEventIntentParams for the downstream service
                         userInput: userInput,
                         userTimezone: userTimezone,
-                        calendarId: validatedParams.calendarId,
-                        timeMin: validatedParams.timeMin,
-                        timeMax: validatedParams.timeMax,
-                        query: validatedParams.query,
+                        calendarId: finalParamsForAction.calendarId,
+                        timeMin: finalParamsForAction.timeMin, // Could be from orchestrator or LLM
+                        timeMax: finalParamsForAction.timeMax, // Could be from orchestrator or LLM
+                        query: finalParamsForAction.query,
                         originalRequestNature: orchestratorParams?.originalRequestNature // Pass the hint
                     }
                 };
@@ -235,18 +244,18 @@ export async function generatePlan(
                 return {
                     action: "general_chat",
                     params: { 
-                        ...validatedParams, // Pass all params from LLM for general_chat
+                        ...finalParamsForAction, // Pass all params from LLM for general_chat
                         actionType: "general_chat", // Ensure actionType is set
-                        reasoning: validatedParams.reasoning || `LLM classified as general_chat. Original query: "${userInput}". LLM params: ${JSON.stringify(rawArgs)}`
+                        reasoning: finalParamsForAction.reasoning || `LLM classified as general_chat. Original query: "${userInput}". LLM params: ${JSON.stringify(rawArgs)}`
                     }
                 };
             } else { 
-                 // For list_events, update_event, delete_event
+                 // For list_events, update_event
                  // These actions will use the parameters directly as validated.
                  console.log(`[Planner] Determined action: ${determinedAction}. Using validated params.`);
                  return {
-                    action: determinedAction, // e.g., "list_events", "update_event", "delete_event"
-                    params: validatedParams, // These are CalendarActionParams
+                    action: determinedAction, // e.g., "list_events", "update_event"
+                    params: finalParamsForAction, // These are CalendarActionParams, possibly with overridden timeMin/Max
                 };
             }
         } catch (error) {

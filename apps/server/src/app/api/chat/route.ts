@@ -9,8 +9,9 @@ import { v4 as uuidv4 } from 'uuid'; // For generating conversation_id
 import { Prisma } from "@prisma/client"; // Import Prisma namespace
 // Import for Central Orchestrator
 import { getNextAction } from "../../../lib/centralOrchestratorLLM";
+
 import { OrchestratorDecision, OrchestratorActionType } from "../../../types/orchestrator";
-import { ExecutePlanResult, ClarificationNeededForDeletion } from "../../../lib/chatController"; // Import new types
+import { ExecutePlanResult, ClarificationNeededForDeletion, CreateEventExecutionResult } from "../../../lib/chatController"; // Import new types
 
 export async function POST(req: NextRequest) {
   // 1. Get and verify Clerk session token
@@ -278,75 +279,90 @@ export async function POST(req: NextRequest) {
 
     try {
       console.log(`[ChatRoute] Planner generated plan: ${plan.action}, params:`, plan.params);
-      const executionResult: ExecutePlanResult = await executePlan({
-        plan, userId, googleAccessToken, explicitCalendarId, selectedCalendarIds, userTimezone,
-        textInput: orchestratorDecision.params?.userInput || textInput, 
-        userCalendarsFormatted, currentTimeISO
+      const executePlanResult = await executePlan({
+        plan,
+        internalDbUserId: internalUserId,
+        clerkUserId: userId,
+        googleAccessToken,
+        explicitCalendarId: requestBody.explicitCalendarId,
+        selectedCalendarIds: requestBody.selectedCalendarIds,
+        userTimezone: requestBody.userTimezone,
+        textInput: textInput,
+        userCalendarsFormatted: userCalendarsFormatted,
+        currentTimeISO: new Date().toISOString(),
       });
 
-      // Check if executePlan signals clarification is needed (Phase 2 entry point)
-      if (typeof executionResult === 'object' && executionResult.type === 'clarification_needed_for_deletion') {
-        console.log("[ChatRoute] Clarification needed for deletion. Candidates:", executionResult.candidates);
-        const clarificationInputForOrchestrator = `SYSTEM_CLARIFICATION_REQUEST: Original query was \"${executionResult.originalQuery}\". Found ambiguous events. Candidates: ${JSON.stringify(executionResult.candidates)}. Ask user to select.`;
-        
-        const currentUserTurnForHistory = {
-            id: uuidv4(),
-            conversationId: conversationId,
-            userId: internalUserId,
-            turnNumber: userTurnNumber, 
-            actor: 'USER' as const, 
-            messageText: textInput, 
-            timestamp: new Date(),
-            llmPrompt: null,
-            llmResponseRaw: null,
-            toolCalled: null,
-            toolParams: null,
-            toolResult: null,
-            clarificationContext: null,
-            requiresFollowUp: false,
-        };
+      let finalResponseToUser: string;
+      let structuredToolResultForLog: any = null; // For storing structured data from create_event
 
+      if (typeof executePlanResult === 'string') {
+        finalResponseToUser = executePlanResult;
+        assistantToolResult = executePlanResult; // Log string result
+      } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_deletion') {
+        // This is a ClarificationNeededForDeletion object
+        // The orchestrator needs to be invoked again, but in a special "clarification" mode.
+        assistantRequiresFollowUp = true;
+        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject; // Save the candidates
+        
+        const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_candidates_for_confirmation. Details: ${JSON.stringify(executePlanResult)}`;
         const clarificationDecision = await getNextAction(
-          [...orderedHistory, currentUserTurnForHistory], 
-          clarificationInputForOrchestrator, 
-          userTimezone,
-          userCalendarsFormatted,
+          orderedHistory, 
+          clarificationInput, 
+          requestBody.userTimezone,
+          userCalendarsFormatted, 
           true 
         );
-        finalAssistantResponseMessage = clarificationDecision.responseText || "Please clarify which item you meant.";
-        assistantMessageForDb = finalAssistantResponseMessage;
-        assistantToolCalled = clarificationDecision.actionType; // Should be 'ask_user_clarification_for_tool_ambiguity'
-        assistantToolParams = clarificationDecision.params as Prisma.InputJsonValue;
-        assistantLlmPrompt = clarificationDecision.reasoning;
-        assistantClarificationContext = clarificationDecision.clarificationContextToSave as Prisma.InputJsonValue;
-        assistantRequiresFollowUp = true; // Clarification always requires follow-up
 
-        await prisma.conversationTurn.create({
-          data: {
-            conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
-            actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: assistantToolCalled, 
-            toolParams: assistantToolParams, toolResult: { originalCandidates: executionResult.candidates } as Prisma.InputJsonValue, 
-            requiresFollowUp: assistantRequiresFollowUp, clarificationContext: assistantClarificationContext, // This is IMPORTANT: save context from clarificationDecision
-            llmPrompt: assistantLlmPrompt
-          }
-        });
-        return NextResponse.json({ message: finalAssistantResponseMessage, conversationId: conversationId });
+        finalResponseToUser = clarificationDecision.responseText || "I need a bit more clarity. Could you help me understand?";
+        assistantMessageForDb = finalResponseToUser;
+        if (clarificationDecision.clarificationContextToSave) {
+          assistantClarificationContext = clarificationDecision.clarificationContextToSave as any as Prisma.JsonObject;
+        } // Orchestrator should manage this context for the next turn
+        assistantLlmPrompt = `System prompt for clarification + ${JSON.stringify(executePlanResult)}`; 
+        assistantToolResult = clarificationDecision as any as Prisma.InputJsonValue; 
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_time_range') {
+        // This is ClarificationNeededForTimeRange object
+        assistantRequiresFollowUp = true;
+        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject; // Save original query and attempted time range
+
+        const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_clarify_time_range. Details: ${JSON.stringify(executePlanResult)}. Task: Ask user to confirm or provide a new time range for their deletion request.`;
+        const clarificationDecision = await getNextAction(
+          orderedHistory,
+          clarificationInput,
+          requestBody.userTimezone,
+          userCalendarsFormatted,
+          true // Indicate this is a clarification request generation
+        );
+
+        finalResponseToUser = clarificationDecision.responseText || "I couldn't find any events in that time frame. Would you like to try a different date or time range?";
+        assistantMessageForDb = finalResponseToUser;
+        if (clarificationDecision.clarificationContextToSave) {
+          assistantClarificationContext = clarificationDecision.clarificationContextToSave as any as Prisma.JsonObject;
+        } // Orchestrator should manage this context for the next turn
+        assistantLlmPrompt = `System prompt for time range clarification + ${JSON.stringify(executePlanResult)}`;
+        assistantToolResult = clarificationDecision as any as Prisma.InputJsonValue;
+
+      } else {
+        // This is CreateEventExecutionResult
+        const createResult = executePlanResult as CreateEventExecutionResult; 
+        finalResponseToUser = createResult.userMessage;
+        // For create_event, log the array of created event details as the toolResult
+        structuredToolResultForLog = createResult.createdEventsDetails;
+        assistantToolResult = structuredToolResultForLog as Prisma.InputJsonValue; 
       }
-
-      // If not clarification, then executionResult is a string
-      finalAssistantResponseMessage = executionResult as string;
-      assistantMessageForDb = executionResult as string;
-      assistantToolResult = { text: executionResult } as Prisma.InputJsonValue;
       
+      assistantMessageForDb = finalResponseToUser;
+
       await prisma.conversationTurn.create({
         data: {
           conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
-          actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: assistantToolCalled, 
-          toolParams: assistantToolParams, toolResult: assistantToolResult, 
-          requiresFollowUp: assistantRequiresFollowUp, clarificationContext: assistantClarificationContext,
+          actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: assistantToolCalled,
+          toolParams: assistantToolParams, toolResult: assistantToolResult, requiresFollowUp: assistantRequiresFollowUp,
+          clarificationContext: assistantClarificationContext, llmPrompt: assistantLlmPrompt
         }
       });
-      return NextResponse.json({ message: executionResult, conversationId: conversationId });
+      return NextResponse.json({ message: finalResponseToUser, conversationId: conversationId });
 
     } catch (error: unknown) {
         let errorForDbLogging: string | Prisma.InputJsonValue = "Unknown tool execution error";

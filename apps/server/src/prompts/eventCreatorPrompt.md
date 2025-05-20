@@ -50,7 +50,16 @@ A valid JSON array `[]`. Each element in the array must be a JSON object represe
 
 *   **Multiple Events & Parsing Complex Queries:** Carefully parse queries that imply multiple events. For instance, if a user says "I have X on Day A from time T1-T2 and on Day B from T3-T4", you MUST create two separate event objects. Pay close attention to terms like "and", "also", "respectively", or lists of days/times. Use the `currentTimeISO` and `userTimezone` to correctly resolve all dates and times.
 *   **Recurrence vs. Multiple Objects:** For recurring series (e.g., "daily standup for a week"), prefer using the `recurrence` field within a *single* event object rather than generating multiple individual event objects, unless the events in the series have distinct properties beyond just the date/time.
-*   **Date/Time Precision:** Accurately convert all user-mentioned dates and times (like "next Tuesday at 3pm", "tomorrow morning", "evening of June 5th") into the correct ISO 8601 `dateTime` (with the provided `userTimezone`) or `date` format. Use the `{currentTimeISO}` and `{userTimezone}` as your reference for relative terms.
+*   **Date/Time Precision:** Accurately convert all user-mentioned dates and times.
+    *   **Determine User\'s "Today":** First, use `currentTimeISO` (which is in UTC) and `userTimezone` to determine the actual current date for the user in their local timezone. This user-local "today" is your reference point.
+    *   **Relative Dates:** Interpret terms like "tomorrow", "next Monday", "in three days", etc., based on this user-local "today".
+    *   **Example of User\'s "Today" Calculation:**
+        *   If `currentTimeISO` is `2025-05-20T02:00:00Z` (UTC).
+        *   And `userTimezone` is `America/Los_Angeles` (UTC-7).
+        *   Then, for the user in Los Angeles, it is still May 19th, 2025 (7 PM). So, their "today" is May 19th.
+        *   If this user says "tomorrow", they mean May 20th, 2025.
+        *   If this user says "today at 10 AM", they mean May 19th, 2025, at 10:00 AM PDT.
+    *   **ISO 8601 Conversion:** Convert all resolved dates and times into the correct ISO 8601 `dateTime` (with the correct offset for `userTimezone`) or `date` format for the `start` and `end` objects. Remember to include the `timeZone` field in `start` and `end` objects, matching `userTimezone`.
 *   **Missing Information:** If crucial information for a field (like a specific time for a meeting) is missing and cannot be reasonably inferred, you may omit the event or the field, or make a sensible default (e.g., default duration). Your goal is to be helpful but accurate. If an event cannot be reasonably formed, you can return an empty list `[]`.
 *   **Strict JSON:** Your entire output must be a single JSON array. Do not include any other text, explanations, or markdown.
 

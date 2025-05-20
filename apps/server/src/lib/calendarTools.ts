@@ -197,13 +197,13 @@ export class CreateEventTool extends StructuredTool {
   description = "Tool to create a new calendar event. Input should be a detailed event object.";
   schema = createEventParamsSchema; // Uses the new, more detailed schema
 
-  private userId: string;
-  private accessToken: string;
+  private clerkUserId: string;
+  private googleAccessToken: string;
 
-  constructor(userId: string, accessToken: string) {
+  constructor(clerkUserId: string, googleAccessToken: string) {
     super();
-    this.userId = userId;
-    this.accessToken = accessToken;
+    this.clerkUserId = clerkUserId;
+    this.googleAccessToken = googleAccessToken;
   }
 
   protected async _call(
@@ -217,40 +217,81 @@ export class CreateEventTool extends StructuredTool {
 
     // Critical: Ensure `start` and `end` are present as per schema refinement, or handle error.
     if (!arg.start || !arg.end) {
-        return "Error: Both start and end times are strictly required for event creation.";
+        // This should ideally be caught by Zod schema validation if start/end are not optional there.
+        // However, createEventParamsSchema makes start/end objects required, but their internal date/dateTime are optional.
+        // The refine on eventDateTimeSchemaForTool ensures date or dateTime.
+        // The top-level createEventParamsSchema itself doesn't currently enforce that 'start' and 'end' have valid populated content beyond being objects.
+        // This check is a safeguard.
+        return JSON.stringify({ 
+          message: "Error: Both start and end time objects, each containing a valid 'date' or 'dateTime', are strictly required for event creation.",
+          details: null 
+        });
     }
-    // The refine in eventDateTimeSchemaForTool checks for date OR dateTime, 
-    // but CreateEventTool itself should enforce that *both* start and end objects are present.
 
     let eventForGoogleApi: calendar_v3.Schema$Event;
     try {
-        // Attempt to transform/map the arg to the structure Google's API expects.
-        // If createEventParamsSchema is identical to googleCalendarEventCreateObjectSchema,
-        // and that is already GAPI compliant, this transform might be very direct.
         eventForGoogleApi = transformToGoogleCalendarEvent(arg);
     } catch (transformError: any) {
         console.error("[CreateEventTool] Error transforming event parameters:", transformError);
-        return `Error preparing event data: ${transformError.message}`;
+        return JSON.stringify({
+          message: `Error preparing event data: ${transformError.message}`,
+          details: null
+        });
     }
-
-    // Ensure calendarId is not accidentally nested inside eventForGoogleApi if it came from arg top-level
-    // (transformToGoogleCalendarEvent should handle this by not touching calendarId if it's not a direct event property)
 
     try {
       const createdEvent = await apiInsertEvent(
-        this.userId,
-        this.accessToken,
+        this.clerkUserId,
+        this.googleAccessToken,
         calendarId, // Use the top-level calendarId from arg
         eventForGoogleApi
       );
       if (createdEvent && createdEvent.id) {
-        return `Event created successfully. ID: ${createdEvent.id}, Summary: ${createdEvent.summary || '(No summary)'}, Link: ${createdEvent.htmlLink || '(No link)'}`;
+        // Construct a more user-friendly message
+        let message = `Event created successfully: '${createdEvent.summary || "(No summary)"}'.`;
+        if (createdEvent.start?.dateTime) {
+          message += ` It starts on ${new Date(createdEvent.start.dateTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+        } else if (createdEvent.start?.date) {
+          message += ` It's an all-day event on ${new Date(createdEvent.start.date + 'T00:00:00').toLocaleDateString(undefined, { dateStyle: 'medium' })}`; // Adjust for proper date display
+        }
+        if (createdEvent.end?.dateTime) {
+          message += ` and ends on ${new Date(createdEvent.end.dateTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}.`;
+        } else if (createdEvent.end?.date && createdEvent.start?.date !== createdEvent.end.date) { // Only show end date if different for all-day
+            const endDate = new Date(createdEvent.end.date + 'T00:00:00');
+            // Google API's end date for all-day events is exclusive, so subtract a day for display if it makes sense
+            // Or simply state it ends *before* this date.
+            // For simplicity, let's just state the date if different and significant.
+            // A common pattern is for the all-day end date to be the day *after* the event visually ends.
+            // We'll just show the date for now.
+            message += ` It concludes before ${new Date(endDate).toLocaleDateString(undefined, { dateStyle: 'medium' })}.`;
+        }
+        if (createdEvent.htmlLink) {
+          message += ` You can view it here: ${createdEvent.htmlLink}`;
+        }
+
+        return JSON.stringify({
+          message: message.trim(),
+          details: {
+            id: createdEvent.id,
+            summary: createdEvent.summary,
+            htmlLink: createdEvent.htmlLink,
+            start: createdEvent.start, // Will include dateTime, date, timeZone
+            end: createdEvent.end,     // Will include dateTime, date, timeZone
+            calendarId: calendarId // Add calendarId used for creation
+          }
+        });
       }
-      return "Failed to create event: No event data returned from API or ID missing.";
+      return JSON.stringify({
+        message: "Failed to create event: No event data returned from API or ID missing.",
+        details: null
+      });
     } catch (error) {
       // ... (existing error handling)
       if (error instanceof z.ZodError) {
-        return `Validation Error during CreateEventTool execution: ${error.message}`;
+        return JSON.stringify({
+          message: `Validation Error during CreateEventTool execution: ${error.message}`,
+          details: null
+        });
       }
       console.error("Error in CreateEventTool API call:", error);
       const gaxiosError = error as any;
@@ -259,34 +300,37 @@ export class CreateEventTool extends StructuredTool {
         const googleError = gaxiosError.response.data.error;
         errorMessage = `${googleError.message} (Code: ${googleError.code}${googleError.errors ? ', Details: ' + JSON.stringify(googleError.errors) : ''})`;
       }
-      return `Error creating event: ${errorMessage}`;
+      return JSON.stringify({
+        message: `Error creating event: ${errorMessage}`,
+        details: null
+      });
     }
   }
 }
 
 export class ListEventsTool extends StructuredTool {
   name = "list_events_tool";
-  description = "Lists calendar events. Can filter by query, timeMin, timeMax, and calendarId. Also handles timeZone.";
+  description = "Lists calendar events. Can filter by query, timeMin, timeMax, and calendarId. Also handles timeZone. If a 'questionAboutEvents' is provided, raw event data will be fetched for further analysis.";
   schema = listEventsParamsSchema;
-  private userId: string;
-  private accessToken: string;
+  private clerkUserId: string;
+  private googleAccessToken: string;
 
-  constructor(userId: string, accessToken: string) {
+  constructor(clerkUserId: string, googleAccessToken: string) {
     super();
-    this.userId = userId;
-    this.accessToken = accessToken;
+    this.clerkUserId = clerkUserId;
+    this.googleAccessToken = googleAccessToken;
   }
 
-  protected async _call(params: ListEventsParams): Promise<string> {
+  protected async _call(params: ListEventsParams): Promise<calendar_v3.Schema$Event[] | string> {
     const validatedParams = this.schema.parse(params);
     const { calendarId, query, timeMin, timeMax, timeZone, questionAboutEvents } = validatedParams;
 
     console.log(
-      `[ListEventsTool] User ${this.userId} listing events from calendar: ${calendarId}, query: ${query}, timeMin: ${timeMin}, timeMax: ${timeMax}, timeZone: ${timeZone}, question: ${questionAboutEvents}`
+      `[ListEventsTool] User ${this.clerkUserId} listing events from calendar: ${calendarId}, query: ${query}, timeMin: ${timeMin}, timeMax: ${timeMax}, timeZone: ${timeZone}, question: ${questionAboutEvents}`
     );
 
     try {
-      const events = await apiListEvents(this.userId, this.accessToken, calendarId, {
+      const events = await apiListEvents(this.clerkUserId, this.googleAccessToken, calendarId, {
         q: query,
         timeMin,
         timeMax,
@@ -297,47 +341,32 @@ export class ListEventsTool extends StructuredTool {
 
       if (!events || events.length === 0) {
         if (questionAboutEvents) {
-          return `No events found in calendar '${calendarId}' for the period to answer your question: "${questionAboutEvents}".`;
+          // If a question was asked, but no events found, return an empty array for the analyzer.
+          return []; 
         }
         return "No events found matching your criteria.";
       }
 
       if (questionAboutEvents) {
-        const eventDetails = events.map(event => ({
-          id: event.id,
-          summary: event.summary,
-          start: event.start?.dateTime || event.start?.date,
-          end: event.end?.dateTime || event.end?.date,
-          description: event.description,
-          location: event.location,
-          calendarId: calendarId
-        }));
-        const eventContextForLLM = events
-        .map(
-          (event) =>
-            `Event: ${event.summary || "N/A"}\nStart: ${
-              event.start?.dateTime || event.start?.date || "N/A"
-            }\nEnd: ${event.end?.dateTime || event.end?.date || "N/A"}`
-        )
-        .join("\n---\n");
-        return eventContextForLLM;
+        // If there's a question, return the raw events for analysis by chatController
+        return events; 
       }
 
+      // If no question, format a simple string summary
       const eventListString = events
         .map(
           (event) =>
-            `Summary: ${event.summary}, Start: ${
-              event.start?.dateTime || event.start?.date
+            `Summary: ${event.summary || "(No summary)"}, Start: ${
+              event.start?.dateTime || event.start?.date || "N/A"
             }`
         )
         .join("; ");
       return `Found ${events.length} event(s): ${eventListString}`;
+
     } catch (error: any) {
       console.error("[ListEventsTool] Error:", error);
       const errorMessage = error.response?.data?.error?.message || error.message || "Failed to list events due to an unknown error.";
-      if (error.errors && Array.isArray(error.errors) && error.errors.length > 0) {
-        return `Failed to list events: ${error.errors[0].message}`;
-      }
+      // Consider if this should throw or return a more structured error
       return `Failed to list events: ${errorMessage}`;
     }
   }
@@ -349,13 +378,13 @@ export class UpdateEventTool extends StructuredTool {
     "Tool to update an existing calendar event. Input must include eventId and fields to update (summary, startTime (ISO 8601 UTC), endTime (ISO 8601 UTC), attendees (array of emails)). Can optionally specify calendarId.";
   schema = updateEventParamsSchema;
 
-  private userId: string;
-  private accessToken: string;
+  private clerkUserId: string;
+  private googleAccessToken: string;
 
-  constructor(userId: string, accessToken: string) {
+  constructor(clerkUserId: string, googleAccessToken: string) {
     super();
-    this.userId = userId;
-    this.accessToken = accessToken;
+    this.clerkUserId = clerkUserId;
+    this.googleAccessToken = googleAccessToken;
   }
 
   protected async _call(
@@ -365,8 +394,8 @@ export class UpdateEventTool extends StructuredTool {
       const eventPatch = transformToGoogleCalendarEvent(arg);
       // Ensure eventId is present, which is guaranteed by the schema
       const result = await apiPatchEvent(
-        this.userId,
-        this.accessToken,
+        this.clerkUserId,
+        this.googleAccessToken,
         arg.calendarId,
         arg.eventId,
         eventPatch
