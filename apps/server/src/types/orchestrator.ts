@@ -11,6 +11,7 @@ export interface ConversationTurnInput {
 
 export type OrchestratorActionType =
   | 'call_planner'
+  | 'fetch_context_and_call_planner' // New: Query calendar for context, then call planner
   | 'call_event_creator_llm' // Example for future direct LLM calls by orchestrator
   | 'call_event_deleter_llm_for_clarification' // Example for future direct LLM calls by orchestrator
   | 'ask_user_question' // When the orchestrator itself needs to ask for clarification *before* any tool/planner
@@ -37,6 +38,19 @@ export interface OrchestratorDecision {
     // For 'ask_user_clarification_for_tool_ambiguity'
     ambiguousCandidates?: DeletionCandidate[]; // Candidates that caused ambiguity
     originalUserQueryForClarification?: string; // The user query that led to ambiguity
+    // For 'fetch_context_and_call_planner'
+    contextQuery?: string; // Query to find referenced events (e.g., "class on Thursday")
+    contextTimeMin?: string; // Time range for finding referenced events
+    contextTimeMax?: string; // Time range for finding referenced events
+    contextCalendarIds?: string[]; // Specific calendars to search (optional)
+    timeMin?: string; // For other actions
+    timeMax?: string; // For other actions
+    anchorEventsContext?: Array<{
+      summary: string;
+      start: string;
+      end: string;
+      calendarId: string;
+    }>; // Existing anchor events context
   } | any; 
   responseText?: string | null; 
   clarificationContextToSave?: {

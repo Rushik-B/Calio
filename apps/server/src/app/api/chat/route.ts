@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clerkClient } from "@clerk/clerk-sdk-node";
 import { generatePlan, CalendarAction } from "../../../lib/planner";
-import { getUserCalendarList, deleteEvent as apiDeleteEvent } from "../../../lib/googleCalendar"; 
+import { getUserCalendarList, deleteEvent as apiDeleteEvent, listEvents as apiListEvents } from "../../../lib/googleCalendar"; 
 import { ZodError } from "zod";
 import { executePlan } from "../../../lib/chatController"; // Import the new controller function
 import prisma from "../../../lib/prisma"; // Import your Prisma client
@@ -10,8 +10,8 @@ import { Prisma } from "@prisma/client"; // Import Prisma namespace
 // Import for Central Orchestrator
 import { getNextAction } from "../../../lib/centralOrchestratorLLM";
 
-import { OrchestratorDecision, OrchestratorActionType } from "../../../types/orchestrator";
-import { ExecutePlanResult, ClarificationNeededForDeletion, CreateEventExecutionResult } from "../../../lib/chatController"; // Import new types
+import { OrchestratorDecision } from "../../../types/orchestrator";
+import { CreateEventExecutionResult } from "../../../lib/chatController"; // Import new types
 
 export async function POST(req: NextRequest) {
   // 1. Get and verify Clerk session token
@@ -84,7 +84,6 @@ export async function POST(req: NextRequest) {
 
   // 3. Get the user's text input, explicit calendarId, selectedCalendarIds, and conversationId
   let textInput: string;
-  let explicitCalendarId: string | undefined;
   let selectedCalendarIds: string[] | undefined;
   let userTimezone: string = "UTC";
   let conversationId: string;
@@ -96,9 +95,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Request body must contain a 'text' field as a string.", conversationId: requestBody.conversationId }, { status: 400 });
     }
     textInput = requestBody.text;
-    if (requestBody.calendarId && typeof requestBody.calendarId === 'string') {
-      explicitCalendarId = requestBody.calendarId;
-    }
     if (requestBody.selectedCalendarIds && Array.isArray(requestBody.selectedCalendarIds)) {
       if (requestBody.selectedCalendarIds.every((id: any) => typeof id === 'string')) {
         selectedCalendarIds = requestBody.selectedCalendarIds;
@@ -138,9 +134,6 @@ export async function POST(req: NextRequest) {
   const lastAssistantTurnWithContext = orderedHistory
     .filter(turn => turn.actor === 'ASSISTANT' && turn.clarificationContext)
     .pop();
-  const activeClarificationContext = lastAssistantTurnWithContext?.clarificationContext || null;
-  // Pass activeClarificationContext to getNextAction if its logic expects it,
-  // for now, getNextAction derives it from full history.
 
   // Log user's message (moved here to ensure it's logged before orchestrator sees it in history for resolution)
   try {
@@ -160,7 +153,6 @@ export async function POST(req: NextRequest) {
 
   // 4. Generate a plan using the planner
   const currentTimeISO = new Date().toISOString();
-  let plan: CalendarAction | null;
   let userCalendarsFormatted: string = "No calendars found or user has not granted permission.";
 
   try {
@@ -386,6 +378,309 @@ export async function POST(req: NextRequest) {
                 conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
                 actor: 'ASSISTANT', messageText: assistantMessageForDb,
                 toolCalled: assistantToolCalled ? `${assistantToolCalled}_error` : 'execute_plan_error',
+                toolParams: assistantToolParams, 
+                toolResult: assistantToolResult, requiresFollowUp: false,
+            }
+        });
+        const responseErrorBody: {error: string, details?: any, conversationId: string} = { error: finalAssistantResponseMessage, conversationId: conversationId };
+        if (error instanceof ZodError) responseErrorBody.details = error.format();
+        return NextResponse.json(responseErrorBody, { status: (error instanceof ZodError) ? 400 : 500 });
+    }
+  } else if (orchestratorDecision.actionType === 'fetch_context_and_call_planner') {
+    console.log("[ChatRoute] Orchestrator directs to 'fetch_context_and_call_planner'. Params:", orchestratorDecision.params);
+    
+    // Step 1: Fetch context events from calendar
+    let fetchedAnchorEvents: Array<{summary: string, start: string, end: string, calendarId: string}> = [];
+    
+    try {
+      const { contextQuery, contextTimeMin, contextTimeMax, contextCalendarIds } = orchestratorDecision.params || {};
+      
+      if (!contextQuery) {
+        throw new Error("contextQuery is required for fetch_context_and_call_planner");
+      }
+      
+      console.log(`[ChatRoute] Fetching context events with query: "${contextQuery}", timeMin: ${contextTimeMin}, timeMax: ${contextTimeMax}`);
+      
+      // Determine which calendars to search
+      const calendarsToSearch = contextCalendarIds && contextCalendarIds.length > 0 
+        ? contextCalendarIds 
+        : selectedCalendarIds && selectedCalendarIds.length > 0
+        ? selectedCalendarIds
+        : ['primary']; // Default to primary calendar
+      
+      // Search for events in the specified calendars
+      for (const calId of calendarsToSearch) {
+        try {
+          const listOptions: any = {
+            q: contextQuery, // Search by query
+            timeMin: contextTimeMin,
+            timeMax: contextTimeMax,
+            singleEvents: true,
+            orderBy: "startTime",
+            timeZone: userTimezone
+          };
+          
+          console.log(`[ChatRoute] Searching calendar '${calId}' for context events with options:`, listOptions);
+          const eventsFromCal = await apiListEvents(userId, googleAccessToken, calId, listOptions);
+          
+          if (eventsFromCal && eventsFromCal.length > 0) {
+            eventsFromCal.forEach((event: any) => {
+              if (event.id && event.summary) {
+                fetchedAnchorEvents.push({
+                  summary: event.summary,
+                  start: event.start?.dateTime || event.start?.date || '',
+                  end: event.end?.dateTime || event.end?.date || '',
+                  calendarId: calId
+                });
+              }
+            });
+          }
+        } catch (calendarError) {
+          console.warn(`[ChatRoute] Failed to search calendar '${calId}':`, calendarError);
+          // Continue with next calendar
+        }
+      }
+      
+      // If no events found with the specific query, try a broader search for implicit temporal references
+      if (fetchedAnchorEvents.length === 0 && contextQuery) {
+        console.log(`[ChatRoute] No events found with query '${contextQuery}', trying broader search...`);
+        
+        // Try searching without the query to get all events in the time range
+        for (const calId of calendarsToSearch) {
+          try {
+            const broadListOptions: any = {
+              timeMin: contextTimeMin,
+              timeMax: contextTimeMax,
+              singleEvents: true,
+              orderBy: "startTime",
+              timeZone: userTimezone
+            };
+            
+            console.log(`[ChatRoute] Broad search in calendar '${calId}' with options:`, broadListOptions);
+            const allEventsFromCal = await apiListEvents(userId, googleAccessToken, calId, broadListOptions);
+            
+            if (allEventsFromCal && allEventsFromCal.length > 0) {
+              allEventsFromCal.forEach((event: any) => {
+                if (event.id && event.summary) {
+                  fetchedAnchorEvents.push({
+                    summary: event.summary,
+                    start: event.start?.dateTime || event.start?.date || '',
+                    end: event.end?.dateTime || event.end?.date || '',
+                    calendarId: calId
+                  });
+                }
+              });
+            }
+          } catch (broadSearchError) {
+            console.warn(`[ChatRoute] Failed to do broad search on calendar '${calId}':`, broadSearchError);
+            // Continue with next calendar
+          }
+        }
+      }
+      
+      console.log(`[ChatRoute] Found ${fetchedAnchorEvents.length} context events:`, fetchedAnchorEvents);
+      
+    } catch (contextError) {
+      console.error("[ChatRoute] Error fetching context events:", contextError);
+      finalAssistantResponseMessage = `I had trouble finding the referenced event in your calendar. Could you please be more specific about which event you're referring to?`;
+      assistantMessageForDb = finalAssistantResponseMessage;
+      assistantToolResult = { error: "Context fetch failed", details: contextError instanceof Error ? contextError.message : String(contextError) } as Prisma.InputJsonValue;
+      await prisma.conversationTurn.create({
+        data: {
+          conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+          actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: 'fetch_context_error',
+          toolParams: orchestratorDecision.params as Prisma.InputJsonValue | undefined,
+          toolResult: assistantToolResult, requiresFollowUp: false,
+        }
+      });
+      return NextResponse.json({ message: finalAssistantResponseMessage, conversationId: conversationId });
+    }
+    
+    // Step 2: Call planner with the fetched context
+    let plan: CalendarAction | null;
+    try {
+      const plannerInput = orchestratorDecision.params?.userInput || textInput;
+      console.log(`[ChatRoute] Calling planner with context. Input: "${plannerInput}", Anchor events: ${fetchedAnchorEvents.length}`);
+      
+      // Merge any existing anchor context with the newly fetched context
+      const combinedAnchorContext = [
+        ...(orchestratorDecision.params?.anchorEventsContext || []),
+        ...fetchedAnchorEvents
+      ];
+      
+      plan = await generatePlan(
+        plannerInput, 
+        currentTimeISO, 
+        userTimezone, 
+        userCalendarsFormatted,
+        {
+          ...orchestratorDecision.params,
+          anchorEventsContext: combinedAnchorContext.length > 0 ? combinedAnchorContext : undefined
+        }
+      );
+      assistantToolCalled = `fetch_context_then_planner->${plan?.action || 'unknown_plan_action'}`;
+      assistantToolParams = {
+        ...orchestratorDecision.params,
+        fetchedAnchorEvents: fetchedAnchorEvents,
+        planParams: plan?.params
+      } as Prisma.InputJsonValue;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown planner error";
+      console.error("[ChatRoute] Error in planner after context fetch:", error);
+      finalAssistantResponseMessage = `Planner failed after fetching context: ${message}`;
+      assistantMessageForDb = finalAssistantResponseMessage;
+      assistantToolResult = { error: finalAssistantResponseMessage, fetchedAnchorEvents: fetchedAnchorEvents, details: (error instanceof ZodError) ? error.format() : undefined } as Prisma.InputJsonValue;
+      await prisma.conversationTurn.create({
+        data: {
+          conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+          actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: 'planner_error_after_context',
+          toolParams: assistantToolParams, 
+          toolResult: assistantToolResult, requiresFollowUp: false,
+        }
+      });
+      return NextResponse.json({ error: finalAssistantResponseMessage, details: (error instanceof ZodError) ? error.format() : undefined, conversationId: conversationId }, { status: 500 });
+    }
+
+    if (!plan) {
+      finalAssistantResponseMessage = "Could not generate a plan from the input after fetching context.";
+      assistantMessageForDb = finalAssistantResponseMessage;
+      assistantToolResult = { error: finalAssistantResponseMessage, fetchedAnchorEvents: fetchedAnchorEvents };
+      await prisma.conversationTurn.create({
+        data: {
+          conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+          actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: 'planner_no_plan_after_context',
+          toolParams: assistantToolParams, 
+          toolResult: assistantToolResult, requiresFollowUp: false,
+        }
+      });
+      return NextResponse.json({ error: finalAssistantResponseMessage, conversationId: conversationId }, { status: 400 });
+    }
+
+    // Continue with the same plan execution logic as 'call_planner'...
+
+    try {
+      console.log(`[ChatRoute] Executing plan with fetched context: ${plan.action}, params:`, plan.params);
+      const executePlanResult = await executePlan({
+        plan,
+        internalDbUserId: internalUserId,
+        clerkUserId: userId,
+        googleAccessToken,
+        explicitCalendarId: requestBody.explicitCalendarId,
+        selectedCalendarIds: requestBody.selectedCalendarIds,
+        userTimezone: requestBody.userTimezone,
+        textInput: textInput,
+        userCalendarsFormatted: userCalendarsFormatted,
+        currentTimeISO: new Date().toISOString(),
+      });
+
+      let finalResponseToUser: string;
+      let structuredToolResultForLog: any = null; // For storing structured data from create_event
+
+      if (typeof executePlanResult === 'string') {
+        finalResponseToUser = executePlanResult;
+        assistantToolResult = {
+          planResult: executePlanResult,
+          fetchedAnchorEvents: fetchedAnchorEvents
+        } as Prisma.InputJsonValue;
+      } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_deletion') {
+        // This is a ClarificationNeededForDeletion object
+        assistantRequiresFollowUp = true;
+        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject;
+        
+        const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_candidates_for_confirmation. Details: ${JSON.stringify(executePlanResult)}`;
+        const clarificationDecision = await getNextAction(
+          orderedHistory, 
+          clarificationInput, 
+          requestBody.userTimezone,
+          userCalendarsFormatted, 
+          true 
+        );
+
+        finalResponseToUser = clarificationDecision.responseText || "I need a bit more clarity. Could you help me understand?";
+        assistantMessageForDb = finalResponseToUser;
+        if (clarificationDecision.clarificationContextToSave) {
+          assistantClarificationContext = clarificationDecision.clarificationContextToSave as any as Prisma.JsonObject;
+        }
+        assistantLlmPrompt = `System prompt for clarification + ${JSON.stringify(executePlanResult)}`; 
+        assistantToolResult = {
+          clarificationDecision: clarificationDecision,
+          fetchedAnchorEvents: fetchedAnchorEvents
+        } as unknown as Prisma.InputJsonValue;
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_time_range') {
+        // This is ClarificationNeededForTimeRange object
+        assistantRequiresFollowUp = true;
+        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject;
+
+        const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_clarify_time_range. Details: ${JSON.stringify(executePlanResult)}. Task: Ask user to confirm or provide a new time range for their deletion request.`;
+        const clarificationDecision = await getNextAction(
+          orderedHistory,
+          clarificationInput,
+          requestBody.userTimezone,
+          userCalendarsFormatted,
+          true
+        );
+
+        finalResponseToUser = clarificationDecision.responseText || "I couldn't find any events in that time frame. Would you like to try a different date or time range?";
+        assistantMessageForDb = finalResponseToUser;
+        if (clarificationDecision.clarificationContextToSave) {
+          assistantClarificationContext = clarificationDecision.clarificationContextToSave as any as Prisma.JsonObject;
+        }
+        assistantLlmPrompt = `System prompt for time range clarification + ${JSON.stringify(executePlanResult)}`;
+        assistantToolResult = {
+          clarificationDecision: clarificationDecision,
+          fetchedAnchorEvents: fetchedAnchorEvents
+        } as unknown as Prisma.InputJsonValue;
+
+      } else {
+        // This is CreateEventExecutionResult
+        const createResult = executePlanResult as CreateEventExecutionResult; 
+        finalResponseToUser = createResult.userMessage;
+        // For create_event, log the array of created event details as the toolResult
+        structuredToolResultForLog = createResult.createdEventsDetails;
+        assistantToolResult = {
+          createdEventsDetails: structuredToolResultForLog,
+          fetchedAnchorEvents: fetchedAnchorEvents
+        } as Prisma.InputJsonValue; 
+      }
+      
+      assistantMessageForDb = finalResponseToUser;
+
+      await prisma.conversationTurn.create({
+        data: {
+          conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+          actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: assistantToolCalled,
+          toolParams: assistantToolParams, toolResult: assistantToolResult, requiresFollowUp: assistantRequiresFollowUp,
+          clarificationContext: assistantClarificationContext, llmPrompt: assistantLlmPrompt
+        }
+      });
+      return NextResponse.json({ message: finalResponseToUser, conversationId: conversationId });
+
+    } catch (error: unknown) {
+        let errorForDbLogging: string | Prisma.InputJsonValue = "Unknown tool execution error";
+        assistantMessageForDb = "Error performing planned action after fetching context."; 
+
+        if (error instanceof ZodError) {
+            console.error("[ChatRoute] Parameter validation error for tool (from controller) after context fetch:", error.format());
+            errorForDbLogging = { error: "Parameter validation failed for the calendar action.", details: error.format() } as Prisma.InputJsonValue;
+            assistantMessageForDb = `Error: Parameter validation failed. Details: ${JSON.stringify(error.format())}`;
+        } else {
+            const message = error instanceof Error ? error.message : "Unknown tool execution error";
+            errorForDbLogging = message; 
+            assistantMessageForDb = `Error: Error performing planned action after fetching context: ${message}`;
+            console.error(`[ChatRoute] Error executing plan via controller for action '${plan.action}' after context fetch:`, error);
+        }
+        assistantToolResult = { 
+          error: errorForDbLogging,
+          fetchedAnchorEvents: fetchedAnchorEvents
+        } as Prisma.InputJsonValue;
+        finalAssistantResponseMessage = assistantMessageForDb; 
+
+        await prisma.conversationTurn.create({
+            data: {
+                conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+                actor: 'ASSISTANT', messageText: assistantMessageForDb,
+                toolCalled: assistantToolCalled ? `${assistantToolCalled}_error` : 'execute_plan_error_after_context',
                 toolParams: assistantToolParams, 
                 toolResult: assistantToolResult, requiresFollowUp: false,
             }

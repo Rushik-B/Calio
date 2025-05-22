@@ -21,6 +21,7 @@ const orchestratorLLM = new ChatGoogleGenerativeAI({
 const llmDecisionSchema = z.object({
   actionType: z.enum([
     "call_planner",
+    "fetch_context_and_call_planner",
     "respond_directly",
     "ask_user_question",
     "ask_user_clarification_for_tool_ambiguity",
@@ -40,6 +41,11 @@ const llmDecisionSchema = z.object({
       // Params for perform_google_calendar_action
       GCToolName: z.string().optional(),
       GCToolArgs: z.any().optional(),
+      // Params for fetch_context_and_call_planner
+      contextQuery: z.string().optional(),
+      contextTimeMin: z.string().optional(),
+      contextTimeMax: z.string().optional(),
+      contextCalendarIds: z.array(z.string()).nullable().optional(),
       timeMin: z.string().nullable().optional(),
       timeMax: z.string().nullable().optional(),
       anchorEventsContext: z
@@ -103,6 +109,38 @@ function formatConversationHistoryForPrompt(history: ConversationTurn[]): string
     .join("\n");
 }
 
+// Calculate timezone offset for the user's timezone using proper method
+function getTimezoneOffset(timezone: string): string {
+  const date = new Date();
+  
+  // Create formatter that includes timezone offset
+  const formatter = new Intl.DateTimeFormat('en', {
+    timeZone: timezone,
+    timeZoneName: 'longOffset'
+  });
+  
+  // Extract the offset from the formatted string
+  const parts = formatter.formatToParts(date);
+  const offsetPart = parts.find(part => part.type === 'timeZoneName');
+  
+  if (offsetPart && offsetPart.value.startsWith('GMT')) {
+    // Extract offset like "GMT-07:00" -> "-07:00"
+    return offsetPart.value.substring(3);
+  }
+  
+  // Fallback method
+  const utc = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const local = new Date(date.toLocaleString('en-US', { timeZone: timezone }));
+  const offsetMs = local.getTime() - utc.getTime();
+  const offsetMinutes = Math.floor(offsetMs / (1000 * 60));
+  
+  const hours = Math.floor(Math.abs(offsetMinutes) / 60);
+  const minutes = Math.abs(offsetMinutes) % 60;
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  
+  return `${sign}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+}
+
 export async function getNextAction(
   conversationHistory: ConversationTurn[],
   currentUserMessage: string,
@@ -111,6 +149,23 @@ export async function getNextAction(
   isClarificationRequest?: boolean // New optional flag
 ): Promise<OrchestratorDecision> {
   const formattedHistory = formatConversationHistoryForPrompt(conversationHistory);
+  
+  // Calculate current time in user's timezone for better date reference
+  const now = new Date();
+  const userLocalTime = new Intl.DateTimeFormat('en-CA', {
+    timeZone: userTimezone,
+    year: 'numeric',
+    month: '2-digit', 
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(now);
+  
+  // Calculate timezone offset for the user's timezone using proper method
+  const timezoneOffset = getTimezoneOffset(userTimezone);
+  
   let systemPromptContent: string;
 
   // Check if the last assistant turn in history has clarification context to resolve
@@ -144,6 +199,9 @@ export async function getNextAction(
     The user has now responded. Your task is to interpret their response *in relation to the specific candidates presented* and the original broader query.
 
     User's Timezone: ${userTimezone}
+    User's Available Calendars: ${userCalendarsFormatted || "Not available"}
+    Current Date/Time: ${userLocalTime} (This is the current time in ${userTimezone})
+    Timezone Offset: ${timezoneOffset} (Use this exact offset for ISO8601 formatting)
     Original User Query that led to clarification: "${originalQuery}"
     Candidates previously presented to user for potential deletion:
     ${candidates
@@ -220,6 +278,10 @@ export async function getNextAction(
     Your task is to ask the user a clear question to get a corrected or new time range for their deletion request. You can also offer them to cancel the deletion.
 
     User's Timezone: ${userTimezone}
+    User's Available Calendars: ${userCalendarsFormatted || "Not available"}
+    Current Date/Time: ${userLocalTime} (This is the current time in ${userTimezone})
+    Timezone Offset: ${timezoneOffset} (Use this exact offset for ISO8601 formatting)
+
     Conversation History (if available):
     ${formattedHistory}
 
@@ -249,6 +311,10 @@ export async function getNextAction(
     The user's original query and the ambiguous items found by a tool will be provided in the user message (prefixed with SYSTEM_CLARIFICATION_REQUEST).
 
     User's Timezone: ${userTimezone}
+    User's Available Calendars: ${userCalendarsFormatted || "Not available"}
+    Current Date/Time: ${userLocalTime} (This is the current time in ${userTimezone})
+    Timezone Offset: ${timezoneOffset} (Use this exact offset for ISO8601 formatting)
+
     Conversation History (if available):
     ${formattedHistory}
 
@@ -276,10 +342,39 @@ export async function getNextAction(
 
     User's Timezone: ${userTimezone}
     User's Available Calendars: ${userCalendarsFormatted || "Not available"}
+    Current Date/Time: ${userLocalTime} (This is the current time in ${userTimezone})
+    Timezone Offset: ${timezoneOffset} (Use this exact offset for ISO8601 formatting)
 
     Conversation History (if available):
     ${formattedHistory}
     (When reviewing history, ASSISTANT turns may have a 'toolResult' field if a tool was successfully used, or a 'System Note' if it summarized an action like event creation. The ASSISTANT's actual textual response to the user is in 'messageText'.)
+
+    **Detecting When Existing Event Context Is Needed:**
+    Pay careful attention to user requests that reference existing events OR temporal relationships that are NOT detailed in the conversation history. Look for BOTH explicit and implicit references:
+    
+    **Explicit Event References:**
+    - "Schedule a meeting before my class on Thursday"
+    - "Add lunch after my dentist appointment tomorrow"
+    - "Create a reminder 30 minutes before my flight next week"
+    - "Book a follow-up call after my interview on Friday"
+    
+    **Implicit Temporal References (CRITICAL):**
+    - "after work today/tomorrow" → Need to find work events to determine when work ends
+    - "before work starts" → Need to find when work begins
+    - "after lunch" → Need to find lunch appointments/blocks
+    - "before my first meeting" → Need to find the first meeting of the day
+    - "after my last appointment" → Need to find the last appointment
+    - "between meetings" → Need to find meeting schedule
+    - "during my break" → Need to find surrounding events to identify breaks
+    - "after hours" → Need to find work schedule
+    - "before the weekend" → Need to find Friday's last event
+    
+    **Key Detection Pattern:** If the user mentions any time relationship (before/after/during/between) with:
+    - work, meetings, appointments, lunch, breaks, classes, etc.
+    - AND the conversation history does NOT contain specific details about these events for the referenced time period
+    - THEN use 'fetch_context_and_call_planner'
+    
+    If the user references existing events (using explicit terms like "my class", "my appointment" OR implicit temporal relationships like "after work", "before lunch") but the conversation history does NOT contain details about these specific events for the referenced timeframe, you should use the 'fetch_context_and_call_planner' action to first query the calendar for the referenced events.
 
     **Handling Follow-up Questions & Relative Event Creation:**
     Pay close attention to the last ASSISTANT message in the 'Conversation History'.
@@ -301,25 +396,58 @@ export async function getNextAction(
        - If the request is for a DELETION task (e.g., "delete the meeting I just scheduled", "remove the events you created earlier"):
          - Assess if the user is likely asking to delete a SINGLE item or MULTIPLE/UNSPECIFIED items. Include this assessment in 'params.originalRequestNature': 'singular' or 'plural_or_unspecified'.
          - **IMPORTANT FOR DELETING RECENTLY CREATED EVENTS:** If the user refers to deleting events "just scheduled" or "you just created", examine the recent ASSISTANT turns in the 'Conversation History'. Look for 'toolResult' or 'System Note' that contains details of created events (like an array of event objects with 'start' and 'end' properties or summaries). If found, calculate a consolidated 'timeMin' and 'timeMax' that encompasses all such recently created events. Pass these 'timeMin' and 'timeMax' values in the 'params' object to the planner. This helps the planner accurately scope the deletion. If no such events are found in history, or the reference is not clearly to *just* created events, let the planner determine timeMin/Max.
-    2. 'respond_directly': If the user's message is a general chat, a greeting, a simple thank you, or if the conversation history (including a recent assistant response) indicates the current message doesn't require a calendar action or can be answered directly from the very recent context of the conversation. For example, if the assistant just listed events and the user asks "is the first one a work event?", and the assistant's previous message text clearly contains this detail, you *could* respond directly if the information is trivial to extract from the immediate past turn. However, for complex extractions or if unsure, prefer 'call_planner'.
-    3. 'ask_user_question': If the user's intent is unclear *before calling any tools or the planner*, and you need to ask a clarifying question before proceeding with any other action. This should generally not be used for follow-up questions where context is available; instead, use 'call_planner' with a refined query for such cases.
+    
+    2. 'fetch_context_and_call_planner': Use this when the user wants to create, modify, or reference existing events that are NOT detailed in the conversation history. This action will:
+       - First query the calendar to find the referenced events
+       - Then proceed with planning using the found events as anchor context
+       - In params, provide:
+         * 'userInput': The user's original request
+         * 'contextQuery': Keywords to find the referenced event. For explicit references, use event names (e.g., 'class', 'dentist appointment'). For implicit temporal references, use relevant keywords (e.g., 'work' for 'after work', 'meeting' for 'after my last meeting', 'appointment' for 'before my first appointment')
+         * 'contextTimeMin' and 'contextTimeMax': Time range to search for the referenced events (be generous to ensure we find them)
+         * 'contextCalendarIds': Array of calendar IDs to search (optional, omit this field entirely to search all calendars, or provide array of specific calendar IDs)
+       - Examples of when to use this:
+         * "Schedule a meeting before my class on Thursday" (need to find "class on Thursday")
+         * "Add travel time before my dentist appointment tomorrow" (need to find "dentist appointment tomorrow")
+         * "Create a follow-up after my interview next week" (need to find "interview next week")
+         * "Schedule a meeting with Sam after work today" (need to find work events today to determine when work ends)
+         * "Book lunch after my morning meetings" (need to find morning meetings to determine when they end)
+         * "Add a call before my first appointment tomorrow" (need to find first appointment tomorrow)
+         * "Schedule dinner after my last meeting Friday" (need to find last meeting on Friday)
+
+    3. 'respond_directly': If the user's message is a general chat, a greeting, a simple thank you, or if the conversation history (including a recent assistant response) indicates the current message doesn't require a calendar action or can be answered directly from the very recent context of the conversation. For example, if the assistant just listed events and the user asks "is the first one a work event?", and the assistant's previous message text clearly contains this detail, you *could* respond directly if the information is trivial to extract from the immediate past turn. However, for complex extractions or if unsure, prefer 'call_planner'.
+    
+    4. 'ask_user_question': If the user's intent is unclear *before calling any tools or the planner*, and you need to ask a clarifying question before proceeding with any other action. This should generally not be used for follow-up questions where context is available; instead, use 'call_planner' with a refined query for such cases.
     
     Output your decision ONLY as a single, valid JSON object matching the following schema, with no other surrounding text or markdown:
     {
-      "actionType": "call_planner" | "respond_directly" | "ask_user_question",
+      "actionType": "call_planner" | "fetch_context_and_call_planner" | "respond_directly" | "ask_user_question",
       "params": {
         "userInput": "The input for the planner. If the user's current message is a follow-up referring to details from a previous turn (e.g., 'do that again but change X', 'add those with summary Y', 'what time is that?'), combine the key details (like times, dates, locations, summaries of events just mentioned by assistant) from the relevant previous turn(s) in the conversation history with the user's current message to form a complete instruction for the planner. For entirely new requests, this will just be the user's current message. Use common sense and formulate a clear, actionable request for the planner.",
         "originalRequestNature": "<If actionType is call_planner AND intent is deletion, specify 'singular' or 'plural_or_unspecified'. Omit otherwise.>",
         "timeMin": "<Optional: If deleting 'just created' events, provide calculated ISO8601 timeMin based on history. Planner will use this. Also applicable if a follow-up implies a time constraint for the planner based on previous turns.>",
         "timeMax": "<Optional: If deleting 'just created' events, provide calculated ISO8601 timeMax based on history. Planner will use this. Also applicable if a follow-up implies a time constraint for the planner based on previous turns.>",
-        "anchorEventsContext": "<Optional: If creating new events relative to events detailed in recent conversation history, provide an array of anchor event objects here, each with summary, start, end, and calendarId.>"
+        "anchorEventsContext": "<Optional: If creating new events relative to events detailed in recent conversation history, provide an array of anchor event objects here, each with summary, start, end, and calendarId.>",
+        "contextQuery": "<For fetch_context_and_call_planner: Keywords to find the referenced existing event. For explicit references, use event names (e.g., 'class', 'dentist appointment'). For implicit temporal references, use relevant keywords (e.g., 'work' for 'after work', 'meeting' for 'after my last meeting', 'appointment' for 'before my first appointment')>",
+        "contextTimeMin": "<For fetch_context_and_call_planner: Start of time range to search for referenced events. MUST use timezone-aware ISO8601 format (e.g., '2025-05-22T00:00:00${timezoneOffset}'). When user says 'today', use current date in their timezone.>",
+        "contextTimeMax": "<For fetch_context_and_call_planner: End of time range to search for referenced events. MUST use timezone-aware ISO8601 format (e.g., '2025-05-22T23:59:59${timezoneOffset}'). When user says 'today', use end of current date in their timezone.>",
+        "contextCalendarIds": "<For fetch_context_and_call_planner: Array of calendar IDs to search (optional, omit this field entirely to search all calendars, or provide array of specific calendar IDs)>"
       },
       "responseText": "If actionType is 'respond_directly' or 'ask_user_question', this is your textual response to the user. Otherwise, this can be omitted. Be as human-like and kind as possible. Act like a personal assistant.",
       "reasoning": "Briefly explain your decision.",
       "clarificationContextToSave": null
     }
     
-    Prioritize 'call_planner' for anything that looks like a new calendar modification task or a contextual follow-up needing calendar data. If the user is just saying 'hi' or 'thanks', use 'respond_directly'. If very unsure, use 'ask_user_question', but prefer re-querying via planner for ambiguous follow-ups.
+    Prioritize 'call_planner' for anything that looks like a new calendar modification task or a contextual follow-up needing calendar data. Use 'fetch_context_and_call_planner' when the user references existing events not in conversation history. If the user is just saying 'hi' or 'thanks', use 'respond_directly'. If very unsure, use 'ask_user_question', but prefer re-querying via planner for ambiguous follow-ups.
+    
+    **CRITICAL PRIORITY RULE: If the user mentions ANY temporal relationship (before/after/during/between) that references potentially existing events or schedules (work, meetings, appointments, lunch, classes, etc.), and these specific events are NOT detailed in the conversation history, you MUST use 'fetch_context_and_call_planner'. Do NOT default to 'call_planner' for these cases.**
+    
+    **DATE CALCULATION RULE: When calculating contextTimeMin/contextTimeMax for relative dates:**
+    - "today" = current date shown above (${userLocalTime.split(',')[0]})
+    - "tomorrow" = next day after current date  
+    - Always use the user's timezone (${userTimezone}) for date calculations
+    - **CRITICAL**: Always include timezone in ISO8601 format (e.g., "2025-05-22T00:00:00-07:00", not "2025-05-22T00:00:00")
+    - Example: If current time is "2025-05-22 14:30:00" and user says "after work today", search from "2025-05-22T00:00:00${timezoneOffset}" to "2025-05-22T23:59:59${timezoneOffset}" for ${userTimezone} timezone
+    
     Ensure the output is nothing but the JSON object.`;
   }
 

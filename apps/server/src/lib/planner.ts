@@ -31,7 +31,7 @@ import { promises as fsPromises } from 'fs';
  */
 const calendarActionSchema = z.object({
   actionType: z.enum(["create_event", "list_events", "update_event", "delete_event", "general_chat"]).describe("The type of calendar action to perform. This is a mandatory field."),
-  calendarId: z.string().optional().describe("The ID of the calendar to use. Defaults to 'primary'. Users might specify this e.g., 'work calendar', 'personal calendar'. You should try to map this to a known ID if possible based on context, otherwise pass it as received if it looks like an ID."),
+  calendarId: z.string().optional().nullable().describe("The ID of the calendar to use. Defaults to 'primary'. Users might specify this e.g., 'work calendar', 'personal calendar'. You should try to map this to a known ID if possible based on context, otherwise pass it as received if it looks like an ID."),
   eventId: z.string().optional().describe("The ID of the event to update or delete."),
   summary: z.string().optional().describe("The summary or title of the event."),
   description: z.string().optional().describe("The detailed description of the event."),
@@ -237,9 +237,15 @@ export async function generatePlan(
             
             console.log(`[Planner] LLM determined action: ${determinedAction}`);
 
+            // Clean null values by converting them to undefined (LLMs sometimes output null instead of omitting fields)
+            const cleanedParams: Omit<typeof validatedParams, 'calendarId'> & { calendarId?: string } = {
+                ...validatedParams,
+                calendarId: validatedParams.calendarId || undefined
+            };
+
             // If orchestrator provided timeMin/timeMax, use them directly, overriding LLM's extraction for these fields.
             // This is crucial for "delete events just created" scenarios where orchestrator calculates the scope.
-            let finalParamsForAction = { ...validatedParams };
+            let finalParamsForAction = { ...cleanedParams };
             if (orchestratorParams?.timeMin && orchestratorParams?.timeMax && determinedAction === "delete_event") {
                 console.log(`[Planner] Overriding timeMin/timeMax with values from orchestrator: ${orchestratorParams.timeMin}, ${orchestratorParams.timeMax}`);
                 finalParamsForAction.timeMin = orchestratorParams.timeMin as string;
