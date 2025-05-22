@@ -84,6 +84,7 @@ export interface CreateEventIntentParams {
   userInput: string;
   userTimezone: string;
   calendarId?: string;
+  anchorEventsContext?: AnchorEventContext[]; // Added to match what planner actually sends
 }
 
 export interface DeleteEventIntentParams {
@@ -96,9 +97,17 @@ export interface DeleteEventIntentParams {
   originalRequestNature?: "singular" | "plural_or_unspecified"; // Hint from orchestrator
 }
 
+// Define a type for the anchor event context, matching eventCreatorLLM.ts
+interface AnchorEventContext {
+  summary?: string | null;
+  start?: { date?: string; dateTime?: string; timeZone?: string } | null;
+  end?: { date?: string; dateTime?: string; timeZone?: string } | null;
+  calendarId?: string | null;
+}
+
 export type CalendarAction = {
     action: "create_event" | "list_events" | "update_event" | "delete_event" | "general_chat";
-    params?: CalendarActionParams | CreateEventIntentParams | DeleteEventIntentParams;
+    params?: CalendarActionParams | CreateEventIntentParams | DeleteEventIntentParams | { userInput: string; userTimezone: string; calendarId?: string; anchorEventsContext?: AnchorEventContext[] }; // Updated for create_event with anchor context
     speakableToolResponse?: string;
 };
 
@@ -107,7 +116,13 @@ export async function generatePlan(
   currentTimeISO: string,
   userTimezone: string,
   userCalendarsFormatted?: string,
-  orchestratorParams?: { originalRequestNature?: "singular" | "plural_or_unspecified"; [key: string]: any } // Added to receive orchestrator hints
+  orchestratorParams?: { 
+    originalRequestNature?: "singular" | "plural_or_unspecified"; 
+    timeMin?: string; // Added for type safety from orchestrator
+    timeMax?: string; // Added for type safety from orchestrator
+    anchorEventsContext?: AnchorEventContext[]; // Added to receive orchestrator hints
+    [key: string]: any 
+  }
 ): Promise<CalendarAction | null> {
   let calendarSystemPrompt = await fsPromises.readFile(calendarSystemPromptPath, 'utf-8');
   
@@ -118,6 +133,23 @@ export async function generatePlan(
     calendarSystemPrompt = calendarSystemPrompt.replace("{userCalendarList}", userCalendarsFormatted);
   } else {
     calendarSystemPrompt = calendarSystemPrompt.replace("{userCalendarList}", "Not available or could not be fetched.");
+  }
+
+  let userInputForPlannerLLM = userInput;
+  if (orchestratorParams?.anchorEventsContext && orchestratorParams.anchorEventsContext.length > 0) {
+    const anchorContextString = orchestratorParams.anchorEventsContext.map(event => {
+      let eventParts = [];
+      if (event.summary) eventParts.push(`Summary: '${event.summary}'`);
+      if (event.start?.dateTime) eventParts.push(`Start: '${event.start.dateTime}'`);
+      else if (event.start?.date) eventParts.push(`Start Date: '${event.start.date}'`);
+      if (event.end?.dateTime) eventParts.push(`End: '${event.end.dateTime}'`);
+      else if (event.end?.date) eventParts.push(`End Date: '${event.end.date}'`);
+      if (event.calendarId) eventParts.push(`Calendar ID: '${event.calendarId}'`);
+      return eventParts.join(", ");
+    }).join("; ");
+    
+    userInputForPlannerLLM = `The user's request '${userInput}' is in reference to the following event(s): [${anchorContextString}]. Please process the user's request based on this context. User's original request for the new event: "${userInput}"`;
+    console.log(`[Planner] Prepended anchor context to userInput: ${userInputForPlannerLLM}`);
   }
 
   const model = new ChatGoogleGenerativeAI({
@@ -142,10 +174,10 @@ export async function generatePlan(
 
   const messages = [
     new SystemMessage(calendarSystemPrompt),
-    new HumanMessage(userInput),
+    new HumanMessage(userInputForPlannerLLM),
   ];
 
-  console.log(`[Planner] Generating plan for input: "${userInput}", currentTime: ${currentTimeISO}, userTimezone: ${userTimezone}`);
+  console.log(`[Planner] Generating plan for input: "${userInputForPlannerLLM}", currentTime: ${currentTimeISO}, userTimezone: ${userTimezone}`);
 
   try {
     const result = await llmWithTools.invoke(messages);
@@ -221,9 +253,10 @@ export async function generatePlan(
                 return {
                     action: "create_event", // This is the final action for the system
                     params: { // CreateEventIntentParams for the downstream service
-                        userInput: userInput,
+                        userInput: userInput, // IMPORTANT: Use the original userInput for the event creator, not the augmented one
                         userTimezone: userTimezone,
-                        calendarId: finalParamsForAction.calendarId 
+                        calendarId: finalParamsForAction.calendarId, 
+                        anchorEventsContext: orchestratorParams?.anchorEventsContext // Pass through anchor context
                     }
                 };
             } else if (determinedAction === "delete_event") {
@@ -231,7 +264,7 @@ export async function generatePlan(
                 return {
                     action: "delete_event",
                     params: { // DeleteEventIntentParams for the downstream service
-                        userInput: userInput,
+                        userInput: userInput, // IMPORTANT: Use the original userInput for the event deleter
                         userTimezone: userTimezone,
                         calendarId: finalParamsForAction.calendarId,
                         timeMin: finalParamsForAction.timeMin, // Could be from orchestrator or LLM

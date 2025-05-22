@@ -118,12 +118,13 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
         throw new Error("Planner did not provide valid input for event creation.");
       }
 
-      console.log("[ChatController] Calling EventCreatorLLM with userInput:", createIntentParams.userInput);
+      console.log("[ChatController] Calling EventCreatorLLM with userInput:", createIntentParams.userInput, "and anchorContext:", createIntentParams.anchorEventsContext);
       const eventJSONsToCreate = await generateEventCreationJSONs({
         userInput: createIntentParams.userInput,
         userTimezone: userTimezone,
         userCalendarsFormatted: userCalendarsFormatted,
-        currentTimeISO: currentTimeISO
+        currentTimeISO: currentTimeISO,
+        anchorEventsContext: createIntentParams.anchorEventsContext
       });
 
       if (!eventJSONsToCreate || eventJSONsToCreate.length === 0) {
@@ -200,7 +201,7 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
             eventsFromCal.forEach(event => fetchedEvents.push({ ...event, calendarId: calId }));
           }
         }
-      } else {
+          } else {
         // Single-calendar: Use ListEventsTool
         console.log(`[ChatController] Single-calendar list_events for calendar: ${effectiveCalendarId} using timezone: ${effectiveTimeZone}`);
         const listTool = new ListEventsTool(clerkUserId, googleAccessToken);
@@ -240,7 +241,7 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
           // toolResult might have been set by ListEventsTool returning "No events found..."
           // Only set a new message if toolResult is still its initial empty string or was not a specific "no events" message.
           if (toolResult === "" || !toolResult.includes("No events found")) {
-            toolResult = `No events found for the period to answer your question: "${parsedListParams.questionAboutEvents}".`;
+            toolResult = `I'm Sorry :( , I couldn't find any events related to "${parsedListParams.questionAboutEvents}". Maybe try rephrasing your question?\n\nP.S. Have you selected the correct calendars?`;
           }
         }
       } else {
@@ -255,7 +256,7 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
                         .join("; ")}`;
                 }).filter(str => str !== null);
                 toolResult = `Found ${fetchedEvents.length} event(s) across ${calsRepresented.length} calendar(s):\n${eventsStringArray.join("\n")}`;
-            } else {
+        } else {
               toolResult = "No events found matching your criteria.";
             }
         }

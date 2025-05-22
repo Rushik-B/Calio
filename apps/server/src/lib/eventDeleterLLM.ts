@@ -39,7 +39,7 @@ export async function generateEventDeletionJSONs(
   let systemPromptContent = await fsPromises.readFile(eventDeleterSystemPromptPath, 'utf-8');
 
   const model = new ChatGoogleGenerativeAI({
-    model: "gemini-1.5-flash-latest", 
+    model: "gemini-2.0-flash", 
     temperature: 0.1, 
   });
 
@@ -79,31 +79,52 @@ Based on this context and your instructions (provided in the system message), pl
     }
     console.log("[EventDeleterLLM] Raw LLM output string:", llmOutput);
 
-    llmOutput = llmOutput.trim();
-    if (llmOutput.startsWith("```json")) {
-      llmOutput = llmOutput.substring(7);
-      if (llmOutput.endsWith("```")) {
-        llmOutput = llmOutput.substring(0, llmOutput.length - 3);
-      }
-    }
-    llmOutput = llmOutput.trim();
+    let jsonString = llmOutput.trim();
 
-    if (!llmOutput.startsWith("[") || !llmOutput.endsWith("]")) {
-        console.warn("[EventDeleterLLM] LLM output does not appear to be a JSON array. Attempting to parse. Output:", llmOutput);
-        if (llmOutput.startsWith("{") && llmOutput.endsWith("}")) {
-            console.log("[EventDeleterLLM] Wrapping single JSON object output in an array.");
-            llmOutput = `[${llmOutput}]`;
-        } else if (llmOutput === "" || llmOutput.toLowerCase() === "null") {
-            console.log("[EventDeleterLLM] LLM output is empty or null, returning empty list.");
+    // Attempt to extract JSON array if surrounded by markdown or other text
+    const jsonArrayMatch = jsonString.match(/```json\s*([\s\S]*?)\s*```|(\[[\s\S]*\])/);
+
+    if (jsonArrayMatch) {
+        // Prioritize the content within ```json ... ``` if present, otherwise take the first direct array match
+        jsonString = jsonArrayMatch[1] || jsonArrayMatch[2];
+        if (jsonString) {
+            jsonString = jsonString.trim();
+        } else {
+            // This case should ideally not be hit if the regex is correct and there's a match
+            console.warn("[EventDeleterLLM] JSON array match found but content is empty. Original output:", llmOutput);
+            return []; // Treat as no valid JSON found
+        }
+    } else if (jsonString.startsWith("```")) { // Handle cases like ```[]```
+        const simplifiedJsonMatch = jsonString.match(/```\s*([\s\S]*?)\s*```/);
+        if (simplifiedJsonMatch && simplifiedJsonMatch[1]) {
+            jsonString = simplifiedJsonMatch[1].trim();
+        } else {
+            console.warn("[EventDeleterLLM] Found markdown fences but could not extract JSON. Original output:", llmOutput);
             return [];
         }
+    } else {
+        // If no clear JSON block is found, and the output isn't an array, it's likely problematic.
+        // However, if the LLM just returns `[]` without markdown, it should be handled.
+        // If it's not starting with `[` it's definitely not a simple array string.
+        if (!jsonString.startsWith("[")) {
+            console.warn("[EventDeleterLLM] LLM output does not appear to be a JSON array and no JSON block was extracted. Original output:", llmOutput);
+            // Check for common non-JSON responses indicating no events
+             if (llmOutput.toLowerCase().includes("no events") || llmOutput.toLowerCase().includes("empty list") || llmOutput.toLowerCase().includes("cannot identify")) {
+                console.log("[EventDeleterLLM] LLM indicated no events to delete through text, returning empty list.");
+                return [];
+            }
+            // If it's none of the above, it's an unexpected format.
+            throw new Error("LLM output is not in the expected JSON array format and does not indicate an empty list through text.");
+        }
     }
-    if (llmOutput === "") {
-        console.log("[EventDeleterLLM] LLM output was an empty string after trimming, returning empty list.");
+    
+    // At this point, jsonString *should* be the JSON array string, or an empty string if LLM legitimately outputted nothing.
+    if (jsonString === "" || jsonString.toLowerCase() === "null") {
+        console.log("[EventDeleterLLM] LLM output is effectively empty or null after extraction, returning empty list.");
         return [];
     }
 
-    const parsedEventList = JSON.parse(llmOutput);
+    const parsedEventList = JSON.parse(jsonString); // This might still throw if jsonString is not valid JSON
     const validatedEventList = eventDeletionRequestListSchema.parse(parsedEventList);
     
     console.log("[EventDeleterLLM] Successfully validated event deletion list:", JSON.stringify(validatedEventList, null, 2));

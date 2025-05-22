@@ -98,12 +98,20 @@ export const eventCreationRequestListSchema = z.array(googleCalendarEventCreateO
 // Path to the new prompt file
 const eventCreatorSystemPromptPath = path.join(process.cwd(), 'src', 'prompts', 'eventCreatorPrompt.md');
 
+// Define a type for the anchor event context
+interface AnchorEventContext {
+  summary?: string | null;
+  start?: { date?: string; dateTime?: string; timeZone?: string } | null;
+  end?: { date?: string; dateTime?: string; timeZone?: string } | null;
+  calendarId?: string | null;
+}
+
 export async function generateEventCreationJSONs(params: {
   userInput: string;
   userTimezone: string;
   userCalendarsFormatted: string; 
-  // Add current time for LLM context if needed, though prompt focuses on user input interpretation
   currentTimeISO?: string; 
+  anchorEventsContext?: AnchorEventContext[]; // New optional parameter
 }): Promise<z.infer<typeof eventCreationRequestListSchema>> {
   
   let systemPromptContent = await fsPromises.readFile(eventCreatorSystemPromptPath, 'utf-8');
@@ -124,25 +132,27 @@ export async function generateEventCreationJSONs(params: {
     // For Gemini, it's usually handled by asking for JSON in the prompt.
   });
 
-  // The prompt itself asks for JSON, so a specific JSON mode in .bind might not be needed
-  // unless the model consistently fails to produce parseable JSON.
-  // For now, relying on prompt instructions for JSON output.
-
-  // System message contains the main instructions and context now, including the user query for this specialized LLM.
-  const messages = [
-    new SystemMessage(systemPromptContent),
-    new HumanMessage(
-      `Here is the context for creating calendar events:
+  let humanMessageContent = `Here is the context for creating calendar events:
 User Input: "${params.userInput}"
 User Timezone: "${params.userTimezone}"
 User Calendar List: "${params.userCalendarsFormatted}"
-Current Time ISO: "${params.currentTimeISO || new Date().toISOString()}"
+Current Time ISO: "${params.currentTimeISO || new Date().toISOString()}"`;
 
-Based on this context and your instructions (provided in the system message), please generate the JSON list of event objects adhering to the schema and examples you were given.`
-    ), 
+  if (params.anchorEventsContext && params.anchorEventsContext.length > 0) {
+    humanMessageContent += `\n\nAnchor Events Context (use these as precise references for timing any new events relative to them):\n${JSON.stringify(params.anchorEventsContext, null, 2)}`;
+  }
+
+  humanMessageContent += `\n\nBased on ALL this context and your instructions (provided in the system message), please generate the JSON list of event objects adhering to the schema and examples you were given.`;
+  
+  const messages = [
+    new SystemMessage(systemPromptContent),
+    new HumanMessage(humanMessageContent), 
   ];
 
   console.log(`[EventCreatorLLM] Generating event JSONs for input: "${params.userInput}", userTimezone: ${params.userTimezone}`);
+  if (params.anchorEventsContext) {
+    console.log('[EventCreatorLLM] Anchor Events Context:', JSON.stringify(params.anchorEventsContext, null, 2));
+  }
 
   try {
     const result = await model.invoke(messages);
