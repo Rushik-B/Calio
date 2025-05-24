@@ -233,7 +233,8 @@ export async function POST(req: NextRequest) {
         currentTimeISO, 
         userTimezone, 
         userCalendarsFormatted,
-        orchestratorDecision.params
+        orchestratorDecision.params,
+        orchestratorDecision.timezoneInfo
       );
       assistantToolCalled = `planner->${plan?.action || 'unknown_plan_action'}`;
       assistantToolParams = plan?.params as Prisma.InputJsonValue | undefined;
@@ -282,6 +283,7 @@ export async function POST(req: NextRequest) {
         textInput: textInput,
         userCalendarsFormatted: userCalendarsFormatted,
         currentTimeISO: new Date().toISOString(),
+        timezoneInfo: orchestratorDecision.timezoneInfo,
       });
 
       let finalResponseToUser: string;
@@ -294,7 +296,12 @@ export async function POST(req: NextRequest) {
         // This is a ClarificationNeededForDeletion object
         // The orchestrator needs to be invoked again, but in a special "clarification" mode.
         assistantRequiresFollowUp = true;
-        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject; // Save the candidates
+        // Enhanced task context for better follow-up handling
+        assistantClarificationContext = {
+          type: 'delete_candidates_for_confirmation',
+          candidates: executePlanResult.candidates,
+          originalUserQuery: executePlanResult.originalQuery
+        } as any as Prisma.JsonObject; // Save the candidates
         
         const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_candidates_for_confirmation. Details: ${JSON.stringify(executePlanResult)}`;
         const clarificationDecision = await getNextAction(
@@ -316,7 +323,13 @@ export async function POST(req: NextRequest) {
       } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_time_range') {
         // This is ClarificationNeededForTimeRange object
         assistantRequiresFollowUp = true;
-        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject; // Save original query and attempted time range
+        // Enhanced task context for better follow-up handling
+        assistantClarificationContext = {
+          type: 'delete_clarify_time_range_pending',
+          originalUserQuery: executePlanResult.originalQuery,
+          attemptedTimeMin: executePlanResult.attemptedTimeMin,
+          attemptedTimeMax: executePlanResult.attemptedTimeMax
+        } as any as Prisma.JsonObject; // Save original query and attempted time range
 
         const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_clarify_time_range. Details: ${JSON.stringify(executePlanResult)}. Task: Ask user to confirm or provide a new time range for their deletion request.`;
         const clarificationDecision = await getNextAction(
@@ -334,6 +347,35 @@ export async function POST(req: NextRequest) {
         } // Orchestrator should manage this context for the next turn
         assistantLlmPrompt = `System prompt for time range clarification + ${JSON.stringify(executePlanResult)}`;
         assistantToolResult = clarificationDecision as any as Prisma.InputJsonValue;
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'conflict_detected_for_creation') {
+        // This is ConflictDetectedForCreation object
+        assistantRequiresFollowUp = true;
+        // Enhanced task context for better follow-up handling
+        assistantClarificationContext = {
+          type: 'conflict_resolution_pending',
+          originalEventDetails: executePlanResult.proposedEvents[0],
+          conflictingEvents: executePlanResult.conflictingEvents,
+          suggestions: executePlanResult.suggestions,
+          originalMessage: executePlanResult.message
+        } as any as Prisma.JsonObject;
+
+        // Format conflict message for user with suggestions
+        let conflictMessage = executePlanResult.message + "\n\n";
+        if (executePlanResult.suggestions && executePlanResult.suggestions.length > 0) {
+          conflictMessage += "Here are your options:\n";
+          executePlanResult.suggestions.forEach((suggestion, index) => {
+            conflictMessage += `${index + 1}. ${suggestion}\n`;
+          });
+          conflictMessage += "\nWhat would you like me to do?";
+        }
+
+        finalResponseToUser = conflictMessage;
+        assistantMessageForDb = finalResponseToUser;
+        assistantLlmPrompt = `System prompt for conflict resolution + ${JSON.stringify(executePlanResult)}`;
+        assistantToolResult = {
+          conflictDetection: executePlanResult
+        } as unknown as Prisma.InputJsonValue;
 
       } else {
         // This is CreateEventExecutionResult
@@ -427,11 +469,12 @@ export async function POST(req: NextRequest) {
             eventsFromCal.forEach((event: any) => {
               if (event.id && event.summary) {
                 fetchedAnchorEvents.push({
+                  id: event.id, // IMPORTANT: Include the real event ID
                   summary: event.summary,
-                  start: event.start?.dateTime || event.start?.date || '',
-                  end: event.end?.dateTime || event.end?.date || '',
+                  start: event.start, // Keep the full start object with dateTime/date/timeZone
+                  end: event.end, // Keep the full end object with dateTime/date/timeZone
                   calendarId: calId
-                });
+                } as any);
               }
             });
           }
@@ -463,11 +506,12 @@ export async function POST(req: NextRequest) {
               allEventsFromCal.forEach((event: any) => {
                 if (event.id && event.summary) {
                   fetchedAnchorEvents.push({
+                    id: event.id, // IMPORTANT: Include the real event ID
                     summary: event.summary,
-                    start: event.start?.dateTime || event.start?.date || '',
-                    end: event.end?.dateTime || event.end?.date || '',
+                    start: event.start, // Keep the full start object with dateTime/date/timeZone
+                    end: event.end, // Keep the full end object with dateTime/date/timeZone
                     calendarId: calId
-                  });
+                  } as any);
                 }
               });
             }
@@ -516,7 +560,8 @@ export async function POST(req: NextRequest) {
         {
           ...orchestratorDecision.params,
           anchorEventsContext: combinedAnchorContext.length > 0 ? combinedAnchorContext : undefined
-        }
+        },
+        orchestratorDecision.timezoneInfo
       );
       assistantToolCalled = `fetch_context_then_planner->${plan?.action || 'unknown_plan_action'}`;
       assistantToolParams = {
@@ -571,6 +616,7 @@ export async function POST(req: NextRequest) {
         textInput: textInput,
         userCalendarsFormatted: userCalendarsFormatted,
         currentTimeISO: new Date().toISOString(),
+        timezoneInfo: orchestratorDecision.timezoneInfo,
       });
 
       let finalResponseToUser: string;
@@ -585,7 +631,12 @@ export async function POST(req: NextRequest) {
       } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_deletion') {
         // This is a ClarificationNeededForDeletion object
         assistantRequiresFollowUp = true;
-        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject;
+        // Enhanced task context for better follow-up handling
+        assistantClarificationContext = {
+          type: 'delete_candidates_for_confirmation',
+          candidates: executePlanResult.candidates,
+          originalUserQuery: executePlanResult.originalQuery
+        } as any as Prisma.JsonObject;
         
         const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_candidates_for_confirmation. Details: ${JSON.stringify(executePlanResult)}`;
         const clarificationDecision = await getNextAction(
@@ -610,7 +661,13 @@ export async function POST(req: NextRequest) {
       } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_time_range') {
         // This is ClarificationNeededForTimeRange object
         assistantRequiresFollowUp = true;
-        assistantClarificationContext = executePlanResult as any as Prisma.JsonObject;
+        // Enhanced task context for better follow-up handling
+        assistantClarificationContext = {
+          type: 'delete_clarify_time_range_pending',
+          originalUserQuery: executePlanResult.originalQuery,
+          attemptedTimeMin: executePlanResult.attemptedTimeMin,
+          attemptedTimeMax: executePlanResult.attemptedTimeMax
+        } as any as Prisma.JsonObject;
 
         const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_clarify_time_range. Details: ${JSON.stringify(executePlanResult)}. Task: Ask user to confirm or provide a new time range for their deletion request.`;
         const clarificationDecision = await getNextAction(
@@ -630,6 +687,35 @@ export async function POST(req: NextRequest) {
         assistantToolResult = {
           clarificationDecision: clarificationDecision,
           fetchedAnchorEvents: fetchedAnchorEvents
+        } as unknown as Prisma.InputJsonValue;
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'conflict_detected_for_creation') {
+        // This is ConflictDetectedForCreation object
+        assistantRequiresFollowUp = true;
+        // Enhanced task context for better follow-up handling
+        assistantClarificationContext = {
+          type: 'conflict_resolution_pending',
+          originalEventDetails: executePlanResult.proposedEvents[0],
+          conflictingEvents: executePlanResult.conflictingEvents,
+          suggestions: executePlanResult.suggestions,
+          originalMessage: executePlanResult.message
+        } as any as Prisma.JsonObject;
+
+        // Format conflict message for user with suggestions
+        let conflictMessage = executePlanResult.message + "\n\n";
+        if (executePlanResult.suggestions && executePlanResult.suggestions.length > 0) {
+          conflictMessage += "Here are your options:\n";
+          executePlanResult.suggestions.forEach((suggestion, index) => {
+            conflictMessage += `${index + 1}. ${suggestion}\n`;
+          });
+          conflictMessage += "\nWhat would you like me to do?";
+        }
+
+        finalResponseToUser = conflictMessage;
+        assistantMessageForDb = finalResponseToUser;
+        assistantLlmPrompt = `System prompt for conflict resolution + ${JSON.stringify(executePlanResult)}`;
+        assistantToolResult = {
+          conflictDetection: executePlanResult
         } as unknown as Prisma.InputJsonValue;
 
       } else {

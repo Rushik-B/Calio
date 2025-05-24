@@ -42,15 +42,16 @@ export interface OrchestratorDecision {
     contextQuery?: string; // Query to find referenced events (e.g., "class on Thursday")
     contextTimeMin?: string; // Time range for finding referenced events
     contextTimeMax?: string; // Time range for finding referenced events
-    contextCalendarIds?: string[]; // Specific calendars to search (optional)
-    timeMin?: string; // For other actions
-    timeMax?: string; // For other actions
+    contextCalendarIds?: string[] | null; // Specific calendars to search (optional)
+    timeMin?: string | null; // For other actions
+    timeMax?: string | null; // For other actions
     anchorEventsContext?: Array<{
       summary: string;
       start: string;
       end: string;
       calendarId: string;
-    }>; // Existing anchor events context
+    }> | null; // Existing anchor events context
+    [key: string]: any;
   } | any; 
   responseText?: string | null; 
   clarificationContextToSave?: {
@@ -60,6 +61,27 @@ export interface OrchestratorDecision {
     // other context fields
   } | any; 
   reasoning?: string; 
+  // NEW: Centralized timezone information
+  timezoneInfo?: {
+    timezone: string;
+    offset: string;
+    userLocalTime: string;
+    currentTimeInUserTZ: string;
+    dates: {
+      today: string;
+      tomorrow: string;
+      yesterday: string;
+    };
+    isoStrings: {
+      todayStart: string;
+      todayEnd: string;
+      tomorrowStart: string;
+      tomorrowEnd: string;
+      yesterdayStart: string;
+      yesterdayEnd: string;
+      currentTime: string;
+    };
+  };
 }
 
 // It can also be useful to have a more specific type for the history passed to the orchestrator's prompt, separate from the DB model

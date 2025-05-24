@@ -97,8 +97,19 @@ export interface DeleteEventIntentParams {
   originalRequestNature?: "singular" | "plural_or_unspecified"; // Hint from orchestrator
 }
 
+export interface UpdateEventIntentParams {
+  userInput: string;
+  userTimezone: string;
+  calendarId?: string; // Calendar ID if planner can determine it
+  timeMin?: string;    // Optional: From planner for scoping event search
+  timeMax?: string;    // Optional: From planner for scoping event search
+  query?: string;      // Optional: From planner for scoping event search
+  anchorEventsContext?: AnchorEventContext[]; // Context events found by orchestrator
+}
+
 // Define a type for the anchor event context, matching eventCreatorLLM.ts
 interface AnchorEventContext {
+  id?: string | null; // Event ID for updates/deletes
   summary?: string | null;
   start?: { date?: string; dateTime?: string; timeZone?: string } | null;
   end?: { date?: string; dateTime?: string; timeZone?: string } | null;
@@ -107,7 +118,7 @@ interface AnchorEventContext {
 
 export type CalendarAction = {
     action: "create_event" | "list_events" | "update_event" | "delete_event" | "general_chat";
-    params?: CalendarActionParams | CreateEventIntentParams | DeleteEventIntentParams | { userInput: string; userTimezone: string; calendarId?: string; anchorEventsContext?: AnchorEventContext[] }; // Updated for create_event with anchor context
+    params?: CalendarActionParams | CreateEventIntentParams | DeleteEventIntentParams | UpdateEventIntentParams | { userInput: string; userTimezone: string; calendarId?: string; anchorEventsContext?: AnchorEventContext[] }; // Updated for create_event with anchor context
     speakableToolResponse?: string;
 };
 
@@ -122,11 +133,35 @@ export async function generatePlan(
     timeMax?: string; // Added for type safety from orchestrator
     anchorEventsContext?: AnchorEventContext[]; // Added to receive orchestrator hints
     [key: string]: any 
+  },
+  timezoneInfo?: { // NEW: Centralized timezone information from orchestrator
+    timezone: string;
+    offset: string;
+    userLocalTime: string;
+    currentTimeInUserTZ: string;
+    dates: {
+      today: string;
+      tomorrow: string;
+      yesterday: string;
+    };
+    isoStrings: {
+      todayStart: string;
+      todayEnd: string;
+      tomorrowStart: string;
+      tomorrowEnd: string;
+      yesterdayStart: string;
+      yesterdayEnd: string;
+      currentTime: string;
+    };
   }
 ): Promise<CalendarAction | null> {
   let calendarSystemPrompt = await fsPromises.readFile(calendarSystemPromptPath, 'utf-8');
   
-  calendarSystemPrompt = calendarSystemPrompt.replace("{currentTimeISO}", currentTimeISO);
+  // Use centralized timezone information instead of doing calculations here
+  const effectiveCurrentTime = timezoneInfo?.currentTimeInUserTZ || currentTimeISO;
+  const effectiveUserTime = timezoneInfo?.userLocalTime || 'Not calculated';
+  
+  calendarSystemPrompt = calendarSystemPrompt.replace("{currentTimeISO}", effectiveCurrentTime);
   calendarSystemPrompt = calendarSystemPrompt.replace("{userTimezone}", userTimezone);
   
   if (userCalendarsFormatted) {
@@ -139,6 +174,7 @@ export async function generatePlan(
   if (orchestratorParams?.anchorEventsContext && orchestratorParams.anchorEventsContext.length > 0) {
     const anchorContextString = orchestratorParams.anchorEventsContext.map(event => {
       let eventParts = [];
+      if (event.id) eventParts.push(`ID: '${event.id}'`);
       if (event.summary) eventParts.push(`Summary: '${event.summary}'`);
       if (event.start?.dateTime) eventParts.push(`Start: '${event.start.dateTime}'`);
       else if (event.start?.date) eventParts.push(`Start Date: '${event.start.date}'`);
@@ -177,7 +213,7 @@ export async function generatePlan(
     new HumanMessage(userInputForPlannerLLM),
   ];
 
-  console.log(`[Planner] Generating plan for input: "${userInputForPlannerLLM}", currentTime: ${currentTimeISO}, userTimezone: ${userTimezone}`);
+  console.log(`[Planner] Generating plan for input: "${userInputForPlannerLLM}", currentTime: ${effectiveCurrentTime}, userTimezone: ${userTimezone}`);
 
   try {
     const result = await llmWithTools.invoke(messages);
@@ -277,6 +313,20 @@ export async function generatePlan(
                         timeMax: finalParamsForAction.timeMax, // Could be from orchestrator or LLM
                         query: finalParamsForAction.query,
                         originalRequestNature: orchestratorParams?.originalRequestNature // Pass the hint
+                    }
+                };
+            } else if (determinedAction === "update_event") {
+                console.log(`[Planner] Action type 'update_event' identified. Passing to specialized Event Updater LLM logic.`);
+                return {
+                    action: "update_event",
+                    params: { // UpdateEventIntentParams for the downstream service
+                        userInput: userInput, // IMPORTANT: Use the original userInput for the event updater
+                        userTimezone: userTimezone,
+                        calendarId: finalParamsForAction.calendarId,
+                        timeMin: finalParamsForAction.timeMin, // For scoping event search
+                        timeMax: finalParamsForAction.timeMax, // For scoping event search
+                        query: finalParamsForAction.query,
+                        anchorEventsContext: orchestratorParams?.anchorEventsContext // Pass through anchor context
                     }
                 };
             } else if (determinedAction === "general_chat") {

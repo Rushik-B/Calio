@@ -3,6 +3,7 @@
 
 .
 ├── Direction
+│   ├── View events implementation chat.md
 │   └── cursor_backend_codebase_review_controll.md
 ├── EVENT_CREATION_FLOW.md
 ├── README.md
@@ -60,6 +61,7 @@
 │   │   ├── eventAnalyzer.ts
 │   │   ├── eventCreatorLLM.ts
 │   │   ├── eventDeleterLLM.ts
+│   │   ├── eventUpdaterLLM.ts
 │   │   ├── generalChatHandler.ts
 │   │   ├── googleCalendar.ts
 │   │   ├── planner.ts
@@ -67,9 +69,11 @@
 │   ├── prompts
 │   │   ├── calendar.md
 │   │   ├── eventCreatorPrompt.md
-│   │   └── eventDeleterPrompt.md
+│   │   ├── eventDeleterPrompt.md
+│   │   └── eventUpdaterPrompt.md
 │   └── types
 │       └── orchestrator.ts
 ├── structure.txt
 ├── tailwind.config.ts
-└── tsconfig.json
+├── tsconfig.json
+└── tsconfig.tsbuildinfo
