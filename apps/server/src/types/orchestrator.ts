@@ -17,7 +17,8 @@ export type OrchestratorActionType =
   | 'ask_user_question' // When the orchestrator itself needs to ask for clarification *before* any tool/planner
   | 'ask_user_clarification_for_tool_ambiguity' // When a tool/planner execution was ambiguous and needs user input
   | 'respond_directly' // For general chat, simple acknowledgements, or direct answers
-  | 'perform_google_calendar_action'; // Example for future direct tool use by orchestrator
+  | 'perform_google_calendar_action' // Example for future direct tool use by orchestrator
+  | 'execute_workflow'; // New: For complex multi-step workflows
 
 export interface DeletionCandidate {
   eventId: string;
@@ -27,8 +28,70 @@ export interface DeletionCandidate {
   startTime?: string; 
 }
 
+// Task interface for workflow-based operations
+export interface Task {
+  id: string; // Unique ID for this task instance in the workflow (e.g., "find_friday_meetings")
+  taskType: string; // Predefined type of operation (see task types below)
+  params?: any; // Parameters specific to this taskType (optional to match Zod schema)
+  dependsOn?: string[]; // IDs of tasks that must complete successfully before this one starts
+  status?: 'pending' | 'ready' | 'running' | 'completed' | 'failed' | 'waiting_for_user'; // Execution status
+  result?: any; // Output of this task, stored in workflow context
+  outputVariable?: string; // Key under which to store result in workflowContext.dataBus
+  humanSummary?: string; // A brief description of what this task does, for logging/debugging
+  retries?: number; // Number of times this task has been retried
+}
+
+// Workflow definition containing multiple tasks
+export interface WorkflowDefinition {
+  name: string; // e.g., "ClearFridayAndNotify", "RescheduleMorningClasses"
+  tasks: Task[];
+  description?: string; // Optional description of what this workflow accomplishes
+}
+
+// Available task types for the workflow engine
+export type TaskType = 
+  // Data Retrieval
+  | 'FetchPreference'
+  | 'FindEvents' 
+  | 'GetEventDetails'
+  | 'CheckAvailability'
+  | 'GetContactDetails'
+  // Data Processing
+  | 'FilterEvents'
+  | 'SortEvents'
+  | 'ExtractAttendees'
+  | 'CalculateDuration'
+  | 'FindTimeIntersection'
+  | 'IdentifySpecificEventsFromList'
+  | 'IdentifyMissingEvents'
+  // Action Formulation
+  | 'GenerateEventCreationPayload'
+  | 'GenerateEventCreationPayloadBatch'
+  | 'GenerateEventUpdatePayload'
+  | 'GenerateEventUpdatePayloadBatch'
+  | 'GenerateDeletionCandidateList'
+  | 'SuggestLighteningStrategies'
+  | 'FindAlternativeSlotsBatch'
+  // Action Execution
+  | 'ExecuteCalendarCreate'
+  | 'ExecuteCalendarCreateBatch'
+  | 'ExecuteCalendarUpdate'
+  | 'ExecuteCalendarUpdateBatch'
+  | 'ExecuteCalendarDelete'
+  | 'ExecuteCalendarDeleteBatch'
+  | 'SendNotificationPlaceholder'
+  // User Interaction
+  | 'RequestUserConfirmation'
+  | 'PresentChoicesToUser'
+  | 'RequestMissingInformation'
+  | 'FormatFinalResponse'
+  // Workflow Control (advanced)
+  | 'BranchOnCondition'
+  | 'LoopOverItems';
+
 export interface OrchestratorDecision {
-  actionType: OrchestratorActionType;
+  // For simple, single-action decisions (backward compatibility)
+  actionType?: OrchestratorActionType;
   params?: {
     userInput?: string;
     originalRequestNature?: "singular" | "plural_or_unspecified"; // Hint for planner
@@ -53,15 +116,26 @@ export interface OrchestratorDecision {
     }> | null; // Existing anchor events context
     [key: string]: any;
   } | any; 
+  
+  // For complex, multi-step decisions (new workflow capability)
+  workflowDefinition?: WorkflowDefinition;
+  
+  // Common fields for both simple and complex decisions
   responseText?: string | null; 
   clarificationContextToSave?: {
-    type: 'delete_candidates_for_confirmation' | string; // Type of context being saved
+    type: 'delete_candidates_for_confirmation' | 'workflow_paused' | string; // Type of context being saved
     candidates?: DeletionCandidate[]; // List of candidates if type is 'delete_candidates_for_confirmation'
     originalUserQuery?: string;
+    workflowState?: {
+      workflowId: string;
+      pausedAt: string; // Task ID where workflow was paused
+      dataBus: { [variableName: string]: any }; // Workflow data state
+      remainingTasks: Task[]; // Tasks still to be executed
+    }; // For paused workflows
     // other context fields
   } | any; 
   reasoning?: string; 
-  // NEW: Centralized timezone information
+  // Centralized timezone information
   timezoneInfo?: {
     timezone: string;
     offset: string;
@@ -85,4 +159,4 @@ export interface OrchestratorDecision {
 }
 
 // It can also be useful to have a more specific type for the history passed to the orchestrator's prompt, separate from the DB model
-// For now, we'll use the Prisma ConversationTurn type directly in getNextAction function signature. 
+// For now, we'll use the Prisma ConversationTurn type directly in getNextAction function signature.

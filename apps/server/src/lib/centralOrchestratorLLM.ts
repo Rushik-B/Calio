@@ -5,12 +5,16 @@ import {
   OrchestratorDecision,
   OrchestratorActionType,
   DeletionCandidate,
+  WorkflowDefinition,
 } from "../types/orchestrator";
 import { ZodError } from "zod";
 import { z } from "zod"; // For parsing LLM JSON output
 
 // Environment variables should be loaded by the main application process (e.g., in route.ts or a global setup)
 // Ensure GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY is available in the environment.
+
+
+//OG
 
 const orchestratorLLM = new ChatGoogleGenerativeAI({
   model: "gemini-2.0-flash", // User changed this from gemini-2.0-flash
@@ -19,6 +23,7 @@ const orchestratorLLM = new ChatGoogleGenerativeAI({
 
 // Schema for the expected JSON output from the LLM for its decision
 const llmDecisionSchema = z.object({
+  // For simple actions (backward compatibility)
   actionType: z.enum([
     "call_planner",
     "fetch_context_and_call_planner",
@@ -26,7 +31,8 @@ const llmDecisionSchema = z.object({
     "ask_user_question",
     "ask_user_clarification_for_tool_ambiguity",
     "perform_google_calendar_action",
-  ]),
+    "execute_workflow", // New: Indicates a workflow should be executed
+  ]).optional(),
   params: z
     .object({
       userInput: z.string().optional(), // User input might be passed to planner
@@ -62,6 +68,25 @@ const llmDecisionSchema = z.object({
     })
     .passthrough()
     .optional(),
+  
+  // For complex workflows (new capability)
+  workflowDefinition: z.object({
+    name: z.string(),
+    description: z.string().optional(),
+    tasks: z.array(z.object({
+      id: z.string(),
+      taskType: z.string(),
+      params: z.any().optional(),
+      dependsOn: z.array(z.string()).optional(),
+      humanSummary: z.string().optional(),
+      outputVariable: z.string().optional(),
+      status: z.enum(['pending', 'ready', 'running', 'completed', 'failed', 'waiting_for_user']).optional(),
+      result: z.any().optional(),
+      retries: z.number().optional(),
+    }))
+  }).optional(),
+  
+  // Common fields
   responseText: z.string().nullable().optional(),
   reasoning: z.string().optional(),
   // We need a way for the LLM to suggest what to save for context if it asks a question
@@ -69,6 +94,7 @@ const llmDecisionSchema = z.object({
   clarificationContextToSave: z.any().optional(),
 });
 
+// Makes a nice string of the conversation history for the LLM to see
 function formatConversationHistoryForPrompt(history: ConversationTurn[]): string {
   if (!history || history.length === 0) {
     return "No previous conversation history.";
@@ -140,7 +166,7 @@ function formatConversationHistoryForPrompt(history: ConversationTurn[]): string
   return `CONVERSATION HISTORY (Most Recent Turn Last):\n${formattedTurns}\n--- END OF HISTORY ---`;
 }
 
-// Calculate timezone offset for the user's timezone using proper method
+// Helper function to calculate timezone offset for the user's timezone using proper method
 function getTimezoneOffset(timezone: string): string {
   const date = new Date();
   
@@ -392,198 +418,371 @@ export async function getNextAction(
       "clarificationContextToSave": null // Usually null after resolving, unless asking another question.
     }
     Be as human-like and kind as possible. If calling planner, ensure the new userInput is comprehensive.`;
+
   } else if (
-    isClarificationRequest &&
-    currentUserMessage.includes(
-      "SYSTEM_CLARIFICATION_REQUEST: Type: delete_clarify_time_range"
-    )
+    activeClarificationContext &&
+    activeClarificationContext.type === "workflow_paused"
   ) {
     /* -------------------------------------------------------------------------- */
-    /*      Mode: Formulate a clarification question for deletion time range      */
+    /*                    Mode: Resume paused workflow                           */
     /* -------------------------------------------------------------------------- */
 
-    let originalQuery = "their previous request";
-    let attemptedTimeMin = "an earlier specified start time";
-    let attemptedTimeMax = "an earlier specified end time";
-
-    try {
-      const detailsMatch = currentUserMessage.match(/Details: ([\s\S]*)\. Task:/);
-      if (detailsMatch && detailsMatch[1]) {
-        const details = JSON.parse(detailsMatch[1]);
-        originalQuery = details.originalQuery || originalQuery;
-        attemptedTimeMin = details.attemptedTimeMin || attemptedTimeMin;
-        attemptedTimeMax = details.attemptedTimeMax || attemptedTimeMax;
-      }
-    } catch (e) {
-      console.error(
-        "[CentralOrchestratorLLM] Error parsing time range clarification details:",
-        e
-      );
-    }
+    const workflowState = activeClarificationContext.workflowState;
+    const pausedAt = workflowState?.pausedAt;
+    const originalUserQuery = activeClarificationContext.originalUserQuery;
 
     systemPromptContent = `You are a top-level AI orchestrator for a calendar assistant. 
-    The system attempted to find events for deletion based on the user's request: "${originalQuery}", looking between ${attemptedTimeMin} and ${attemptedTimeMax}, but no events were found in that specific time frame.
-    Your task is to ask the user a clear question to get a corrected or new time range for their deletion request. You can also offer them to cancel the deletion.
+    You previously paused a workflow for user interaction. The workflow was paused at task "${pausedAt}" while processing the original query: "${originalUserQuery}".
+    The user has now responded. Your task is to determine how to proceed with the workflow.
 
     User's Timezone: ${userTimezone}
     User's Available Calendars: ${userCalendarsFormatted || "Not available"}
     Current Date/Time: ${timezoneInfo.userLocalTime} (This is the current time in ${userTimezone})
     Timezone Offset: ${timezoneInfo.offset} (Use this exact offset for ISO8601 formatting)
-
-    Conversation History (if available):
+    
+    Paused Workflow State:
+    - Workflow ID: ${workflowState?.workflowId}
+    - Paused at task: ${pausedAt}
+    - Remaining tasks: ${workflowState?.remainingTasks?.length || 0}
+    
+    Conversation History:
     ${formattedHistory}
+    User's Current Response: "${currentUserMessage}"
 
-    Based on this, craft a user-facing question.
-    For example: "I couldn't find any events for '${originalQuery}' in the time range ${attemptedTimeMin} to ${attemptedTimeMax}. Would you like to try a different date range, or perhaps specify the event name more clearly?"
+    Based on the user's response, decide the next step:
+    1. **Continue Workflow:** If the user provided the requested information or confirmation, use 'execute_workflow' to resume the paused workflow.
+        - Include the current user response as input for the paused task
+        - Preserve the existing workflow state and data bus
+    2. **Modify Workflow:** If the user wants to change something about the workflow, create a new workflow definition that incorporates their changes.
+    3. **Cancel Workflow:** If the user wants to stop the workflow, use 'respond_directly' to acknowledge the cancellation.
+    4. **New Request:** If the user is asking for something completely different, analyze it as a new request.
 
-    Your available actions are:
-    1. 'ask_user_question': Formulate the question and provide it in 'responseText'. Save the original query in 'clarificationContextToSave' so if the user provides a new time range, the system knows what original deletion request it was for.
-
-    Output your decision ONLY as a single, valid JSON object matching the following schema, with no other surrounding text or markdown:
+    Output your decision ONLY as a single, valid JSON object:
     {
-      "actionType": "ask_user_question",
-      "params": { "originalUserQueryForClarification": "${originalQuery}" },
-      "responseText": "<Your user-facing clarification question about the time range>",
-      "reasoning": "Asking user to clarify or provide a new time range for deletion as no events were found in the previously attempted range.",
-      "clarificationContextToSave": { "type": "delete_clarify_time_range_pending", "originalUserQuery": "${originalQuery}" }
+      "actionType": "execute_workflow" | "respond_directly" | "call_planner" | "ask_user_question",
+      "workflowDefinition": { 
+        // If resuming or modifying workflow, include the updated workflow definition
+        "name": "string",
+        "tasks": [...]
+      },
+      "params": {
+        "userInput": "<User's current response>",
+        "resumeFromPaused": true, // Indicates this is resuming a paused workflow
+        "pausedTaskId": "${pausedAt}",
+        "workflowState": ${JSON.stringify(workflowState)}
+      },
+      "responseText": "<Your response to the user about resuming/modifying/canceling the workflow>",
+      "reasoning": "Briefly explain your decision based on user's response.",
+      "clarificationContextToSave": null // Clear the paused state after processing
     }
-    Be as human-like and kind as possible. Ensure the output is nothing but the JSON object.`;
-  } else if (isClarificationRequest) {
-    /* -------------------------------------------------------------------------- */
-    /*             Mode: Formulate a clarification question (Phase 2)             */
-    /* -------------------------------------------------------------------------- */
+    Be helpful and acknowledge the user's response appropriately.`;
 
-    systemPromptContent = `You are a top-level AI orchestrator for a calendar assistant. 
-    The system has encountered ambiguity after trying to process a user's request. 
-    Your task is to formulate a clear question to the user to resolve this ambiguity. 
-    The user's original query and the ambiguous items found by a tool will be provided in the user message (prefixed with SYSTEM_CLARIFICATION_REQUEST).
-
-    User's Timezone: ${userTimezone}
-    User's Available Calendars: ${userCalendarsFormatted || "Not available"}
-    Current Date/Time: ${timezoneInfo.userLocalTime} (This is the current time in ${userTimezone})
-    Timezone Offset: ${timezoneInfo.offset} (Use this exact offset for ISO8601 formatting)
-
-    Conversation History (if available):
-    ${formattedHistory}
-
-    Based on the SYSTEM_CLARIFICATION_REQUEST, craft a user-facing question. 
-    For example, if candidates for deletion are provided, ask the user to specify which one(s) they want to delete, perhaps by listing them with numbers.
-
-    Your available actions are:
-    1. 'ask_user_clarification_for_tool_ambiguity': Formulate the question and provide it in 'responseText'. You should also decide what context needs to be saved for the next turn to understand the user's answer. This context should be placed in 'clarificationContextToSave'. For example, if you list candidates [A, B, C], then 'clarificationContextToSave' should contain these candidates and their original details so the system can map the user's answer (e.g., "the first one") back to the correct item.
-
-    Output your decision ONLY as a single, valid JSON object matching the following schema, with no other surrounding text or markdown:
-    {
-      "actionType": "ask_user_clarification_for_tool_ambiguity",
-      "params": { "originalUserQueryForClarification": "<The user's original query that led to ambiguity>" },
-      "responseText": "<Your user-facing clarification question listing choices if appropriate>",
-      "reasoning": "Briefly explain why you are asking this question.",
-      "clarificationContextToSave": { "type": "delete_candidates_for_confirmation", "candidates": [{"eventId": "id1", "summary": "Summary A", "calendarId": "cal1", "startTime": "..."}, ...], "originalUserQuery": "<user's original query>" }
-    }
-    Be as human-like and kind as possible. Ensure the output is nothing but the JSON object.`;
   } else {
     /* -------------------------------------------------------------------------- */
-    /*               Mode: Standard request processing (Phase 1 logic)            */
+    /*      Mode: Standard request processing & complexity analysis              */
     /* -------------------------------------------------------------------------- */
 
-    systemPromptContent = `You are a top-level AI orchestrator for a calendar assistant. Your primary goal is to understand the user's intent based on their latest message and the provided conversation history.\n\n    User's Timezone: ${userTimezone}\n    User's Available Calendars: ${userCalendarsFormatted || "Not available"}\n    Current Date/Time: ${timezoneInfo.userLocalTime} (This is the current time in ${userTimezone})\n    Timezone Offset: ${timezoneInfo.offset} (Use this exact offset for ISO8601 formatting)\n\n    ${formattedHistory}\n    (When reviewing history, ASSISTANT turns may have an '[Action: ...]' note detailing tools called and their outcomes, or '[Context: Waiting for user clarification...]' if the assistant asked a question. The ASSISTANT's actual textual response to the user is in 'messageText'.)\n\n    **PRIORITY 1 - Active Task Context Resolution (Absolute Priority):**\n    FIRST, check the very end of the Conversation History for any an ASSISTANT turn with '[Context: Waiting for user clarification...]'. This indicates an active task requiring resolution (e.g., conflict resolution, deletion confirmation, ambiguity clarification).\n    If such a context exists, your primary goal is to interpret the CURRENT user message as an answer to the assistant's pending question or clarification request. Your action should be guided by the specific active task context (e.g., 'conflict_resolution_pending', 'delete_candidates_for_confirmation').\n    These active clarification contexts take ABSOLUTE PRIORITY over any other interpretation. (Handled by earlier 'if/else if' blocks in the code if \`activeClarificationContext\` is set).\n\n    **PRIORITY 2 - Follow-up Detection vs. New Request:**\n    If there is NO active task context from PRIORITY 1, carefully review the LAST turn in the Conversation History (it could be USER or ASSISTANT).\n    1.  **Is the CURRENT user message a direct follow-up to the LAST turn?**\n        **KEY FOLLOW-UP PATTERNS TO DETECT:**\n        \n        **A) Event Modification Follow-ups (CRITICAL):**\n        - Last Turn (Assistant): \"Event created successfully: 'Haircut'. It starts on [date/time]. [Action: ... Created event(s): 'Haircut' (ID: abc123) at [time].]\" \n          Current User Message: \"Wait, make that haircut at 3pm\" OR \"Change it to 3pm\" OR \"Make that 3pm instead\" \n          Interpretation: This IS a follow-up. User wants to UPDATE the haircut event just created.\n          \n        - Last Turn (Assistant): \"I've scheduled 'Meeting with John' for tomorrow 2pm. [Action: ... Created event(s): 'Meeting with John' (ID: xyz789) at ...]\" \n          Current User Message: \"Actually, move that to Friday\" \n          Interpretation: This IS a follow-up. User wants to UPDATE the meeting just created.\n\n        **B) Information Follow-ups:** \n        - Last Turn (Assistant): \"Your next work day is May 22, 2025. [Action: Called tool 'planner->list_events'. Processed tool result.]\" \n          Current User Message: \"What time?\" \n          Interpretation: This IS a follow-up. The user means \"What time is my work on May 22, 2025?\".\n\n        **C) Request Clarification Follow-ups:** \n        - Last Turn (User): \"Schedule dentist appointment for tomorrow at 10am.\" \n          Current User Message: \"Also add a reminder for it.\" \n          Interpretation: This IS a follow-up to the user's own previous request. They are adding details.\n\n        **CRITICAL FOLLOW-UP INDICATORS:** \n        - Words like \"that\", \"it\", \"make that\", \"change that\", \"move that\", \"update that\" \n        - Time modifications: \"at 3pm\", \"to 3pm\", \"3pm instead\", \"earlier\", \"later\" \n        - Reference to recently mentioned events without full context\n\n    2.  **If it IS a follow-up:** Your \`params.userInput\` for the planner MUST combine the necessary context from the LAST turn with the user's current message to form a complete, actionable request.\n        - Example for \"What time?\" after work day info: \`userInput: \"What time is my work on May 22, 2025?\"\`\n        - Example for changing time: \`userInput: \"Update the 'Haircut' event scheduled for tomorrow at 10am to 3pm instead.\"\`\n        - **CRITICAL**: For event modifications, look for created event details in '[Action: ... Created event(s): ...]' notes and include specific event ID/summary in the userInput.\n        The actionType will likely be \`call_planner\`.\n\n    3.  **If it is NOT a clear follow-up OR if it's a completely new topic:** Process the CURRENT user message as a new, standalone request. The history provides general context, but the immediate last turn isn't the direct anchor.\n\n    **PRIORITY 3 - Calendar Operations Detection (for New Requests or Follow-ups that become Calendar Ops):**\n    If the user wants to DELETE, CANCEL, REMOVE, CREATE, UPDATE, or LIST any calendar events (either as a new request or as a follow-up that implies a calendar operation), you MUST use 'call_planner'. NEVER use 'respond_directly' for actual calendar operations. Words like \"delete that [event]\", \"cancel my [meeting]\", \"[event] is cancelled\" always trigger 'call_planner'.\n\n    **Detecting When Existing Event Context Is Needed (for New Requests or if Follow-up Lacks Detail):**\n    Pay careful attention to user requests that reference existing events OR temporal relationships that are NOT detailed in the conversation history. Look for BOTH explicit and implicit references:\n\n    **Explicit Event References:**\n    - \"Schedule a meeting before my class on Thursday\"\n    - \"Add lunch after my dentist appointment tomorrow\"\n\n    **Implicit Temporal References (CRITICAL):**\n    - \"after work today/tomorrow\" → Need to find work events to determine when work ends\n    - \"before work starts\" → Need to find when work begins\n\n    **Key Detection Pattern:** If the user mentions any time relationship (before/after/during/between) with:\n    - work, meetings, appointments, lunch, breaks, classes, etc.\n    - AND the conversation history (especially the recent turns including any '[Action: ...]' notes) does NOT contain specific details about these events for the referenced time period\n    - THEN use 'fetch_context_and_call_planner'\n\n    **Event Modification Detection (for New Requests or if Follow-up Lacks Detail):**\n    If the user wants to update/edit existing events, look for these patterns:\n    - **Direct edit references**: \"change my meeting\", \"move my appointment\"\n    - **Event identification + modification**: \"my dentist appointment tomorrow\" + \"move it to Friday\"\n    - AND the conversation history does NOT contain details about the specific event being referenced (check event IDs or summaries in '[Action: ...]' notes)\n    - THEN use 'fetch_context_and_call_planner' to find the target event first\n\n    If the user references existing events (using explicit terms or implicit temporal relationships) but the conversation history does NOT contain details about these specific events for the referenced timeframe, you should use the 'fetch_context_and_call_planner' action to first query the calendar for the referenced events.\n\n    **CRITICAL - Time Context Preservation for Follow-ups or Vague Dates:**\n    If the user mentions an alternative day/date WITHOUT specifying a time (e.g., \"What about Monday?\", \"How about tomorrow?\", \"Try Friday instead\"), and the recent conversation history (especially the LAST ASSISTANT or USER turn) contains a specific time for a similar event or the subject of discussion, you MUST preserve that original time:\n\n    Examples:\n    - Previous: User \"pilates class at 7pm on sunday\" → Current User: \"What about Monday?\" → Planner \`userInput\`: \"Schedule pilates class at 7pm on Monday\"\n    - Previous: User \"meeting at 2pm tomorrow\" → Current User: \"Make it Wednesday\" → Planner \`userInput\`: \"Schedule meeting at 2pm on Wednesday\"\n\n    Look for the most recent event details (time, duration, title) mentioned in the conversation and combine them with the user's new preference.\n\n    **CRITICAL - Conflict Resolution Follow-ups (Handled by Specific Mode - see PRIORITY 1):\n    If there is an active 'conflict_resolution_pending' context (indicated by '[Context: Waiting... conflict_resolution_pending]'), the user's response is ALWAYS a conflict resolution follow-up. This is handled by a dedicated mode. Your general follow-up logic here is secondary to that.\n\n    **Relative Event Creation (IMPORTANT - for New Requests or if Follow-up Initiates Creation):**\n    If the user's current message asks to create new events relative to an event or events that were explicitly detailed in the recent conversation history (e.g., user says \"schedule a follow-up call one week after my meeting with Dr. Lee\" after the assistant just confirmed \"Meeting with Dr. Lee scheduled for June 3, 3:00 PM - 4:00 PM. [Action: ... Event 'Meeting with Dr. Lee' (ID: abc).]\"), you MUST:\n        1.  Identify the anchor event(s) from the conversation history (look at previous ASSISTANT turns for event creation details in '[Action: ...]' notes, or if the assistant listed event details).\n        2.  Extract the summary, start (with dateTime or date and timeZone), end (with dateTime or date and timeZone), and calendarId of these anchor event(s).\n        3.  Your action should be call_planner.\n        4.  In params, userInput should be the user's current raw request for the *new* events (e.g., \"schedule a follow-up call one week after my meeting with Dr. Lee\").\n        5.  In params, you MUST also include an anchorEventsContext array. Each object in this array should represent one anchor event you extracted, containing its summary, start, end, and calendarId.\n\n    Based on the user's message and the conversation history (especially the last assistant turn for follow-ups), decide the best course of action.\n\n    Your available actions are:\n    1. 'call_planner': If the user's request involves ANY calendar operation (creating, listing, updating, deleting events) that requires actual execution, OR if it's a follow-up question that requires a new calendar operation or re-querying for more details. **CRITICAL**: If the user wants to delete, cancel, remove, or modify ANY event, you MUST use 'call_planner' - NEVER just respond with text. The planner is specialized for this.\n       - If the request is for a DELETION task (e.g., \"delete the meeting I just scheduled\", \"remove the events you created earlier\"):\n         - Assess if the user is likely asking to delete a SINGLE item or MULTIPLE/UNSPECIFIED items. Include this assessment in 'params.originalRequestNature': 'singular' or 'plural_or_unspecified'.\n         - **IMPORTANT FOR DELETING RECENTLY CREATED/MENTIONED EVENTS:** If the user refers to deleting events \"just scheduled\", \"you just created\", or uses demonstrative words like \"that [event]\", \"this [event]\", examine the recent ASSISTANT turns in the 'Conversation History'. Look for '[Action: ... Event \\'Name\\' (ID: xyz).]' notes. If found, calculate a consolidated 'timeMin' and 'timeMax' that encompasses all such recently created/mentioned events. Pass these values in the 'params' object to help the planner accurately scope the deletion.\n         - **DELETION WITH CONTEXT:** If user says \"Delete that Zumba class\" and recent conversation shows a Zumba class was created/mentioned, the userInput should be \"Delete the Zumba class that was just scheduled/mentioned\" with appropriate time constraints.\n\n    2. 'fetch_context_and_call_planner': Use this when the user wants to create, modify, or reference existing events that are NOT detailed in the conversation history (i.e., not mentioned with details in recent '[Action: ...]' notes or assistant messages). This action will:\n       - First query the calendar to find the referenced events\n       - Then proceed with planning using the found events as anchor context\n       - In params, provide:\n         * 'userInput': The user's original request\n         * 'contextQuery': Keywords to find the referenced event. For explicit references, use event names (e.g., 'class', 'dentist appointment'). For implicit temporal references, use relevant keywords (e.g., 'work' for 'after work', 'meeting' for 'after my last meeting', 'appointment' for 'before my first appointment')\n         * 'contextTimeMin' and 'contextTimeMax': Time range to search for the referenced events (be generous to ensure we find them)\n         * 'contextCalendarIds': Array of calendar IDs to search (optional, omit this field entirely to search all calendars, or provide array of specific calendar IDs)\n       - Examples of when to use this:\n         * \"Schedule a meeting before my class on Thursday\" (need to find \"class on Thursday\" IF not mentioned in history)\n         * \"Add travel time before my dentist appointment tomorrow\" (need to find \"dentist appointment tomorrow\" IF not mentioned in history)\n         * \"Schedule a meeting with Sam after work today\" (need to find work events today IF work schedule not in history)\n         * \"Move my dentist appointment to tomorrow\" (need to find \"dentist appointment\" IF not in history to update it)\n\n    3. 'respond_directly': **ONLY** for non-calendar operations like greetings, thanks, general chat, or informational questions that don't require calendar actions AND are NOT follow-ups to prior calendar-related interactions. **NEVER** use this for deletion, creation, modification, or any actual calendar operations - those MUST go to 'call_planner'.\n\n    **DELETION DETECTION - CRITICAL RULES (applies to new requests and follow-ups that become deletions):**\n    If the user says ANY of these, use 'call_planner' (NEVER respond_directly):\n    - \"Delete [event]\", \"Remove [event]\", \"Cancel [event]\"\n    - \"Delete that [class/meeting/appointment]\"\n    - \"[Event] has been cancelled\", \"[Event] is cancelled\"\n    - Any variation expressing intent to remove/delete calendar events\n\n    4. 'ask_user_question': If the user's intent is unclear *before calling any tools or the planner*, AND it's not a follow-up that can be resolved with context, and you need to ask a clarifying question before proceeding with any other action. This should generally not be used for follow-up questions where context is available; instead, use 'call_planner' with a refined query for such cases.\n\n    Output your decision ONLY as a single, valid JSON object matching the following schema, with no other surrounding text or markdown:\n    {\n      "actionType": "call_planner" | "fetch_context_and_call_planner" | "respond_directly" | "ask_user_question",\n      "params": {\n        "userInput": "The input for the planner. If the user's current message is a follow-up referring to details from a previous turn, combine ALL relevant details from the conversation history with the user's current message to form a complete instruction. CRITICAL: If the user suggests an alternative day/date without a time (e.g., 'What about Monday?'), you MUST find the original time from recent conversation and include it (e.g., 'Schedule pilates class at 7pm on Monday'). For entirely new requests, this will just be the user's current message. Always provide a complete, actionable request for the planner.",\n        "originalRequestNature": "<If actionType is call_planner AND intent is deletion, specify 'singular' or 'plural_or_unspecified'. Omit otherwise.> ",\n        "timeMin": "<Optional: If deleting 'just created' events, provide calculated ISO8601 timeMin based on history. Planner will use this. Also applicable if a follow-up implies a time constraint for the planner based on previous turns.> ",\n        "timeMax": "<Optional: If deleting 'just created' events, provide calculated ISO8601 timeMax based on history. Planner will use this. Also applicable if a follow-up implies a time constraint for the planner based on previous turns.> ",\n        "anchorEventsContext": "<Optional: If creating new events relative to events detailed in recent conversation history (check [Action:...] notes for IDs/summaries), provide an array of anchor event objects here, each with summary, start, end, and calendarId. Ensure IDs are included if known from history.> ",\n        "contextQuery": "<For fetch_context_and_call_planner: Keywords to find the referenced existing event. For explicit references, use event names (e.g., 'class', 'dentist appointment'). For implicit temporal references, use relevant keywords (e.g., 'work' for 'after work', 'meeting' for 'after my last meeting', 'appointment' for 'before my first appointment')> ",\n        "contextTimeMin": "<For fetch_context_and_call_planner: Start of time range to search for referenced events. MUST use timezone-aware ISO8601 format (e.g., '2025-05-22T00:00:00${timezoneInfo.offset}'). When user says 'today', use current date in their timezone.> ",\n        "contextTimeMax": "<For fetch_context_and_call_planner: End of time range to search for referenced events. MUST use timezone-aware ISO8601 format (e.g., '2025-05-22T23:59:59${timezoneInfo.offset}'). When user says 'today', use end of current date in their timezone.> ",\n        "contextCalendarIds": "<For fetch_context_and_call_planner: Array of calendar IDs to search (optional, omit this field entirely to search all calendars, or provide array of specific calendar IDs)> "
-      },\n      "responseText": "If actionType is 'respond_directly' or 'ask_user_question', this is your textual response to the user. Otherwise, this can be omitted. Be as human-like and kind as possible. Act like a personal assistant.",\n      "reasoning": "Briefly explain your decision, especially how you interpreted the user's intent in relation to the conversation history (follow-up or new request).",\n      "clarificationContextToSave": null // This is typically null for standard mode, set by clarification modes.\n    }\n\n    Prioritize understanding if the user is making a follow-up or a new request based on the immediate conversation history. Then, determine the appropriate calendar action or context fetching needed.\n\n    **CRITICAL PRIORITY RULE (Reiteration): If the user mentions ANY temporal relationship (before/after/during/between) that references potentially existing events or schedules (work, meetings, appointments, lunch, classes, etc.), and these specific events are NOT detailed in the conversation history (check '[Action: ...]' notes), you MUST use 'fetch_context_and_call_planner'. Do NOT default to 'call_planner' for these cases.**\n\n    **DATE CALCULATION RULE: When calculating contextTimeMin/contextTimeMax for relative dates:**\n    - \"today\" = current date shown above (${timezoneInfo.userLocalTime.split(',')[0]})\n    - \"tomorrow\" = next day after current date\n    - Always use the user's timezone (${userTimezone}) for date calculations\n    - **CRITICAL**: Always include timezone in ISO8601 format (e.g., \"2025-05-22T00:00:00-07:00\", not \"2025-05-22T00:00:00\")\n    - Example: If current time is \"2025-05-22 14:30:00\" and user says \"after work today\", search from \"2025-05-22T00:00:00${timezoneInfo.offset}\" to \"2025-05-22T23:59:59${timezoneInfo.offset}\" for ${userTimezone} timezone\n\n    Ensure the output is nothing but the JSON object.`;
+    // Read the new workflow decomposition prompt
+    let workflowPrompt = "";
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const promptPath = path.join(process.cwd(), 'src/prompts/orchestratorDecompositionPrompt.md');
+      workflowPrompt = fs.readFileSync(promptPath, 'utf8');
+    } catch (error) {
+      console.error("[CentralOrchestratorLLM] Could not read workflow decomposition prompt:", error);
+      // Fallback to basic workflow-aware prompt if file doesn't exist yet
+      workflowPrompt = `# Advanced Calendar Assistant Orchestrator - Query Decomposer
+
+You are an advanced AI orchestrator for a sophisticated calendar assistant. Your primary role is to analyze user requests and determine the optimal execution strategy - either a simple direct action or a complex multi-step workflow.
+
+## Decision Framework
+
+### For Simple Actions (use existing actionType):
+- Single calendar operation
+- Basic queries  
+- General chat
+- Follow-up clarifications
+
+### For Complex Workflows (use workflowDefinition):
+- Multiple sequential operations
+- Conditional logic ("if X then Y")
+- Batch operations with filtering
+- Cross-calendar synchronization
+- Operations requiring user preferences
+
+## Available Simple Action Types:
+- call_planner: Standard calendar operations
+- fetch_context_and_call_planner: When existing events need to be found first
+- respond_directly: General chat, acknowledgments
+- ask_user_question: When clarification is needed
+- perform_google_calendar_action: Direct API calls
+
+## Task Types for Workflows:
+- FindEvents: Search for events
+- FilterEvents: Filter event lists
+- ExtractAttendees: Get attendees from events
+- GenerateEventCreationPayload: Create API payloads
+- ExecuteCalendarCreate: Create events
+- ExecuteCalendarDeleteBatch: Delete multiple events
+- RequestUserConfirmation: Ask for confirmation
+- PresentChoicesToUser: Present options
+
+Always output valid JSON with either actionType OR workflowDefinition.`;
+    }
+
+    systemPromptContent = `${workflowPrompt}
+
+## Current Context
+
+    User's Timezone: ${userTimezone}
+    User's Available Calendars: ${userCalendarsFormatted || "Not available"}
+    Current Date/Time: ${timezoneInfo.userLocalTime} (This is the current time in ${userTimezone})
+    Timezone Offset: ${timezoneInfo.offset} (Use this exact offset for ISO8601 formatting)
+
+Pre-calculated Timezone Information:
+- Today: ${timezoneInfo.dates.today}
+- Tomorrow: ${timezoneInfo.dates.tomorrow}
+- Yesterday: ${timezoneInfo.dates.yesterday}
+- Current time in user TZ: ${timezoneInfo.currentTimeInUserTZ}
+- Today start: ${timezoneInfo.isoStrings.todayStart}
+- Today end: ${timezoneInfo.isoStrings.todayEnd}
+- Tomorrow start: ${timezoneInfo.isoStrings.tomorrowStart}
+- Tomorrow end: ${timezoneInfo.isoStrings.tomorrowEnd}
+
+    ${formattedHistory}
+
+## Current User Message
+"${currentUserMessage}"
+
+## Analysis Instructions
+
+1. **Complexity Assessment**: Determine if this is a simple request (use existing actionType) or complex request (use workflowDefinition).
+
+2. **Simple Request Indicators**:
+   - Single calendar operation
+   - Basic queries
+   - Follow-up clarifications  
+   - General chat
+
+3. **Complex Request Indicators**:
+   - Multiple steps with "and" connectors
+   - Conditional logic ("if", "unless", "but don't")
+   - Batch operations with criteria
+   - Cross-calendar operations
+   - Operations requiring preferences or external constraints
+
+4. **Follow-up Analysis**: Check if this is a follow-up to previous conversation turns that provides context.
+
+5. **Output Format**: Use the JSON schemas provided in the prompt above.
+
+Ensure your output is a single, valid JSON object with no markdown formatting.`;
+
+    // Keep the original standard mode prompt as fallback
+    if (!workflowPrompt || workflowPrompt.length < 100) {
+      systemPromptContent = `You are a top-level AI orchestrator for a calendar assistant.
+      
+      User's Timezone: ${userTimezone}
+      Current Time: ${timezoneInfo.userLocalTime}
+      
+      ${formattedHistory}
+      
+      User Message: "${currentUserMessage}"
+      
+      Respond with valid JSON for a simple action.`;
+    }
   }
 
-  /* --------------------------- Build LLM message array --------------------------- */
+  // Log the processing mode and details
+  console.log("[CentralOrchestratorLLM] Processing mode:", 
+    activeClarificationContext ? `Clarification (${activeClarificationContext.type})` : "Standard Analysis");
 
-  const messages: Array<any> = [];
-  messages.push(new SystemMessage(systemPromptContent));
-
-  // The formatted history is included within the system prompt; if needed, we could map turns to individual messages.
-  messages.push(new HumanMessage(currentUserMessage));
-
-  console.log(
-    `[CentralOrchestratorLLM] Getting next action for input: "${currentUserMessage}"`
-  );
+  // Complexity analysis for standard mode
+  let complexityScore = 0;
+  let complexityIndicators: string[] = [];
+  
+  if (!activeClarificationContext) {
+    console.log("[CentralOrchestratorLLM] Analyzing query complexity for:", currentUserMessage);
+    
+    // Check for complexity indicators
+    const multiStepPatterns = [
+      /\b(and then|after that|then|next|also|additionally|plus)\b/gi,
+      /\b(first.*then|step.*step|1\..*2\.)\b/gi
+    ];
+    
+    const conditionalPatterns = [
+      /\b(if|unless|but don't|except|only if|provided that|when|while|as long as)\b/gi,
+      /\b(avoid|don't.*if|unless.*then)\b/gi
+    ];
+    
+    const batchPatterns = [
+      /\b(all|every|each|any|multiple|batch|several)\b.*\b(events?|meetings?|appointments?)\b/gi,
+      /\b(events?|meetings?|appointments?)\b.*\b(all|every|each|multiple)\b/gi
+    ];
+    
+    const crossCalendarPatterns = [
+      /\b(work and personal|personal and work|both calendars|sync.*calendar)\b/gi,
+      /\b(calendar.*calendar|work.*personal|personal.*work)\b/gi
+    ];
+    
+    const preferencePatterns = [
+      /\b(usual|normal|typical|avoid|don't.*during|my.*time|preferred)\b/gi,
+      /\b(gym|lunch|writing|focus|block|routine)\b/gi
+    ];
+    
+    const timeRelationPatterns = [
+      /\b(after work|before lunch|during|around|between.*and)\b/gi,
+      /\b(morning|afternoon|evening|when.*free|available)\b/gi
+    ];
+    
+    // Score each category
+    if (multiStepPatterns.some(pattern => pattern.test(currentUserMessage))) {
+      complexityScore += 2;
+      complexityIndicators.push("Multiple steps detected");
+    }
+    
+    if (conditionalPatterns.some(pattern => pattern.test(currentUserMessage))) {
+      complexityScore += 2;
+      complexityIndicators.push("Conditional logic detected");
+    }
+    
+    if (batchPatterns.some(pattern => pattern.test(currentUserMessage))) {
+      complexityScore += 1;
+      complexityIndicators.push("Batch operations detected");
+    }
+    
+    if (crossCalendarPatterns.some(pattern => pattern.test(currentUserMessage))) {
+      complexityScore += 1;
+      complexityIndicators.push("Cross-calendar operations detected");
+    }
+    
+    if (preferencePatterns.some(pattern => pattern.test(currentUserMessage))) {
+      complexityScore += 1;
+      complexityIndicators.push("User preferences detected");
+    }
+    
+    if (timeRelationPatterns.some(pattern => pattern.test(currentUserMessage))) {
+      complexityScore += 1;
+      complexityIndicators.push("Time relations detected");
+    }
+    
+    console.log(`[CentralOrchestratorLLM] Complexity analysis - Score: ${complexityScore}, Indicators: [${complexityIndicators.join(', ')}]`);
+    
+    // Enhance system prompt with complexity analysis
+    if (complexityScore >= 2) {
+      console.log("[CentralOrchestratorLLM] High complexity detected, likely to generate workflow");
+      systemPromptContent += `\n\n## COMPLEXITY ANALYSIS RESULT
+This query scored ${complexityScore} complexity points with indicators: ${complexityIndicators.join(', ')}.
+Based on this analysis, consider using workflowDefinition for this request.`;
+    } else {
+      console.log("[CentralOrchestratorLLM] Low complexity detected, likely simple action");
+      systemPromptContent += `\n\n## COMPLEXITY ANALYSIS RESULT
+This query scored ${complexityScore} complexity points. This appears to be a simple request suitable for existing actionType approach.`;
+    }
+  }
 
   try {
+    console.log("[CentralOrchestratorLLM] Invoking LLM for decision making");
+    
+    const messages = [
+      new SystemMessage(systemPromptContent),
+      new HumanMessage(currentUserMessage),
+    ];
+
     const result = await orchestratorLLM.invoke(messages);
-    let llmOutput: any = result.content;
-
-    if (typeof llmOutput !== "string") {
-      console.error("[CentralOrchestratorLLM] LLM output was not a string:", llmOutput);
-      throw new Error("LLM output is not in the expected string format.");
+    let llmOutputText = "";
+    
+    if (typeof result.content === "string") {
+      llmOutputText = result.content;
+    } else if (Array.isArray(result.content)) {
+      llmOutputText = result.content
+        .filter((part) => part.type === "text")
+        .map((part) => (part as any).text)
+        .join("");
     }
 
-    console.log("[CentralOrchestratorLLM] Raw LLM output string:", llmOutput);
+    console.log("[CentralOrchestratorLLM] Raw LLM output length:", llmOutputText.length);
 
-    llmOutput = llmOutput.trim();
+    // Clean and parse the output
+    const cleanedOutput = llmOutputText
+      .trim()
+      .replace(/^```json\s*/, "")
+      .replace(/\s*```$/, "")
+      .replace(/^```\s*/, "")
+      .replace(/\s*```$/, "");
 
-    if (llmOutput.startsWith("```json")) {
-      llmOutput = llmOutput.substring(7);
-      if (llmOutput.endsWith("```")) {
-        llmOutput = llmOutput.substring(0, llmOutput.length - 3);
-      }
+    console.log("[CentralOrchestratorLLM] Attempting to parse LLM decision JSON");
+    
+    let parsedDecision;
+    try {
+      parsedDecision = JSON.parse(cleanedOutput);
+      console.log("[CentralOrchestratorLLM] Successfully parsed JSON decision");
+    } catch (parseError) {
+      console.error("[CentralOrchestratorLLM] JSON parse error:", parseError);
+      throw new Error(`Failed to parse LLM output as JSON: ${parseError}`);
     }
 
-    llmOutput = llmOutput.trim();
-
-    const parsedDecision = JSON.parse(llmOutput);
+    // Validate the decision against our schema
     const validatedDecision = llmDecisionSchema.parse(parsedDecision);
+    console.log("[CentralOrchestratorLLM] Decision validated against schema");
 
-    console.log("[CentralOrchestratorLLM] Validated decision:", validatedDecision);
-
-    let finalParams = validatedDecision.params || {};
-
-    if (validatedDecision.actionType === "call_planner") {
-      if (!finalParams.userInput) {
-        finalParams.userInput = currentUserMessage;
-      }
-    } else if (validatedDecision.actionType === "perform_google_calendar_action") {
-      if (!finalParams) finalParams = {}; // Ensure params object exists
-      // GCToolName and GCToolArgs should be directly in validatedDecision.params from LLM
-      if (!finalParams.GCToolName || !finalParams.GCToolArgs) {
-        console.warn(
-          "[CentralOrchestratorLLM] 'perform_google_calendar_action' is missing GCToolName or GCToolArgs from LLM. This might lead to errors."
-        );
-      }
-    }
-
-    return {
-      actionType: validatedDecision.actionType as OrchestratorActionType,
-      params: finalParams,
+    // Construct the final OrchestratorDecision
+    const decision: OrchestratorDecision = {
+      // Handle both simple actions and workflows
+      actionType: validatedDecision.actionType,
+      params: validatedDecision.params || {},
+      workflowDefinition: validatedDecision.workflowDefinition ? {
+        name: validatedDecision.workflowDefinition.name!,
+        description: validatedDecision.workflowDefinition.description,
+        tasks: validatedDecision.workflowDefinition.tasks!.map(task => ({
+          id: task.id!,
+          taskType: task.taskType!,
+          params: task.params,
+          dependsOn: task.dependsOn,
+          humanSummary: task.humanSummary,
+          outputVariable: task.outputVariable,
+          status: task.status,
+          result: task.result,
+          retries: task.retries,
+        }))
+      } : undefined,
       responseText: validatedDecision.responseText,
       reasoning: validatedDecision.reasoning,
       clarificationContextToSave: validatedDecision.clarificationContextToSave,
       timezoneInfo: timezoneInfo,
     };
-  } catch (error: unknown) {
-    console.error(
-      "[CentralOrchestratorLLM] Error getting or validating orchestrator decision:",
-      error
-    );
 
-    if (error instanceof ZodError) {
-      console.error(
-        "[CentralOrchestratorLLM] Zod Validation Errors for LLM output:",
-        JSON.stringify(error.format(), null, 2)
-      );
+    // Ensure userInput is set for call_planner actions
+    if (decision.actionType === "call_planner" && !decision.params?.userInput) {
+      decision.params = decision.params || {};
+      decision.params.userInput = currentUserMessage;
     }
 
-    // Fallback for errors
-    let responseText =
-      "I'm having a little trouble understanding right now. Could you please try rephrasing your request?";
-
-    if (activeClarificationContext) {
-      // If error happened during clarification resolution
-      responseText =
-        "Sorry, I had trouble processing your choice. Could you try selecting again?";
+    console.log("[CentralOrchestratorLLM] Decision type:", 
+      decision.workflowDefinition ? "Workflow" : decision.actionType);
+    
+    if (decision.workflowDefinition) {
+      console.log("[CentralOrchestratorLLM] Workflow details:", {
+        name: decision.workflowDefinition.name,
+        taskCount: decision.workflowDefinition.tasks.length,
+        taskTypes: decision.workflowDefinition.tasks.map(t => t.taskType)
+      });
     }
 
-    return {
+    return decision;
+
+  } catch (error) {
+    console.error("[CentralOrchestratorLLM] Error in getNextAction:", error);
+    
+    // Fallback decision
+    const fallbackDecision: OrchestratorDecision = {
       actionType: "respond_directly",
-      responseText,
-      reasoning: `Fallback due to error in orchestrator: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      clarificationContextToSave: activeClarificationContext || null,
+      responseText: "I apologize, but I encountered an issue processing your request. Could you please try rephrasing it?",
+      reasoning: `Error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`,
       timezoneInfo: timezoneInfo,
     };
+    
+    console.log("[CentralOrchestratorLLM] Returning fallback decision due to error");
+    return fallbackDecision;
   }
 }
