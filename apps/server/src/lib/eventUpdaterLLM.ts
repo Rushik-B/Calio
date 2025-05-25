@@ -72,7 +72,7 @@ export async function generateEventUpdateJSONs(
 
   const model = new ChatGoogleGenerativeAI({
     model: "gemini-2.0-flash", 
-    temperature: 0.1, 
+    temperature: 0.2, 
   });
 
   const simplifiedEventList = params.eventList.map(event => ({
@@ -175,6 +175,19 @@ Based on this context and your instructions (provided in the system message), pl
 
     const parsedEventList = JSON.parse(jsonString); // This might still throw if jsonString is not valid JSON
     const validatedEventList = eventUpdateRequestListSchema.parse(parsedEventList);
+    
+    // Additional validation: Check for logical errors
+    for (const event of validatedEventList) {
+      if (event.start?.dateTime && event.end?.dateTime) {
+        const startTime = new Date(event.start.dateTime);
+        const endTime = new Date(event.end.dateTime);
+        
+        if (endTime <= startTime) {
+          console.warn(`[EventUpdaterLLM] Logical error detected: End time (${event.end.dateTime}) is before or equal to start time (${event.start.dateTime}) for event ${event.eventId}. Returning empty array for safety.`);
+          return [];
+        }
+      }
+    }
     
     console.log("[EventUpdaterLLM] Successfully validated event update list:", JSON.stringify(validatedEventList, null, 2));
     return validatedEventList;

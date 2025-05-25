@@ -15,6 +15,7 @@ import { handleEventAnalysis } from "@/lib/eventAnalyzer";
 import { generateEventCreationJSONs, eventCreationRequestListSchema } from "@/lib/eventCreatorLLM";
 import { generateEventDeletionJSONs, eventDeletionRequestListSchema } from "@/lib/eventDeleterLLM";
 import { generateEventUpdateJSONs, eventUpdateRequestListSchema } from "@/lib/eventUpdaterLLM";
+import { generateSmartSuggestions } from "@/lib/timeSlotFinder";
 
 interface EventWithCalendarId extends calendar_v3.Schema$Event {
   calendarId: string;
@@ -107,12 +108,24 @@ export interface ConflictDetectedForCreation {
   suggestions: string[];
 }
 
+export interface PartialCreationWithConflicts {
+  type: 'partial_creation_with_conflicts';
+  message: string;
+  createdEvents: CreatedEventDetails[];
+  conflictingEvents: Array<{
+    proposedEvent: any;
+    conflictsWith: any[];
+    suggestions: string[];
+  }>;
+  creationMessages: string[];
+}
+
 export interface CreateEventExecutionResult {
   userMessage: string;
   createdEventsDetails: CreatedEventDetails[]; 
 }
 
-export type ExecutePlanResult = string | ClarificationNeededForDeletion | CreateEventExecutionResult | ClarificationNeededForTimeRange | ConflictDetectedForCreation;
+export type ExecutePlanResult = string | ClarificationNeededForDeletion | CreateEventExecutionResult | ClarificationNeededForTimeRange | ConflictDetectedForCreation | PartialCreationWithConflicts;
 
 // Conflict detection result interface
 interface ConflictCheckResult {
@@ -184,89 +197,24 @@ async function checkEventConflicts(
   };
 }
 
-// Smart suggestion engine - finds available time slots
+// Smart suggestion engine - uses the new timeSlotFinder for accurate free time suggestions
 function generateTimeSlotSuggestions(
   proposedEvent: any,
   existingEvents: calendar_v3.Schema$Event[],
   userTimezone: string
 ): string[] {
-  const suggestions: string[] = [];
-  const proposedStart = parseEventDateTime(proposedEvent.start);
-  const proposedEnd = parseEventDateTime(proposedEvent.end);
-  
-  if (!proposedStart || !proposedEnd) {
-    return ["Please try a different time"];
-  }
-  
-  const duration = proposedEnd.getTime() - proposedStart.getTime();
-  const proposedDate = new Date(proposedStart);
-  
-  // Generate suggestions for the same day first
-  const sameDaySlots = findAvailableSlots(proposedDate, duration, existingEvents);
-  sameDaySlots.slice(0, 2).forEach(slot => {
-    const timeStr = slot.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit', 
-      hour12: true,
-      timeZone: userTimezone 
-    });
-    suggestions.push(`Try ${timeStr} on the same day`);
-  });
-  
-  // Add next day suggestion
-  const nextDay = new Date(proposedDate);
-  nextDay.setDate(nextDay.getDate() + 1);
-  const nextDaySlots = findAvailableSlots(nextDay, duration, existingEvents);
-  if (nextDaySlots.length > 0) {
-    const timeStr = proposedStart.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
-      minute: '2-digit', 
-      hour12: true,
-      timeZone: userTimezone 
-    });
-    suggestions.push(`Schedule tomorrow at ${timeStr}`);
-  }
+  // Use the new smart suggestion engine from timeSlotFinder
+  const suggestions = generateSmartSuggestions(
+    proposedEvent,
+    [], // We'll pass the specific conflicting events if needed
+    existingEvents, // All existing events for comprehensive availability check
+    userTimezone
+  );
   
   // Add fallback option
   suggestions.push("Create anyway and resolve the conflict later");
   
   return suggestions.slice(0, 4); // Limit to 4 suggestions
-}
-
-// Helper function to find available time slots
-function findAvailableSlots(
-  targetDate: Date,
-  duration: number,
-  existingEvents: calendar_v3.Schema$Event[]
-): Date[] {
-  const slots: Date[] = [];
-  const dayStart = new Date(targetDate);
-  dayStart.setHours(8, 0, 0, 0); // Start at 8 AM
-  const dayEnd = new Date(targetDate);
-  dayEnd.setHours(22, 0, 0, 0); // End at 10 PM
-  
-  // Generate potential time slots (every hour)
-  for (let time = dayStart.getTime(); time <= dayEnd.getTime() - duration; time += 60 * 60 * 1000) {
-    const slotStart = new Date(time);
-    const slotEnd = new Date(time + duration);
-    
-    // Check if this slot conflicts with any existing events
-    const hasConflict = existingEvents.some(event => {
-      const existingStart = parseEventDateTime(event.start);
-      const existingEnd = parseEventDateTime(event.end);
-      
-      if (!existingStart || !existingEnd) return false;
-      
-      // Check for overlap
-      return slotStart < existingEnd && existingStart < slotEnd;
-    });
-    
-    if (!hasConflict) {
-      slots.push(slotStart);
-    }
-  }
-  
-  return slots;
 }
 
 export async function executePlan(params: ChatControllerParams): Promise<ExecutePlanResult> {
@@ -533,7 +481,6 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
       const updateListOptions: Omit<calendar_v3.Params$Resource$Events$List, 'calendarId' | 'timeZone'> = {
         timeMin: updateIntentParams.timeMin, 
         timeMax: updateIntentParams.timeMax, 
-        q: updateIntentParams.query,
         singleEvents: true,
         orderBy: "startTime",
       };
@@ -565,7 +512,7 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
       }
 
       if (eventsToConsiderForUpdate.length === 0) {
-        toolResult = `I couldn't find any events matching your description ("${updateIntentParams.userInput}") to update.`;
+        toolResult = `I couldn't find any events in the specified time range to consider for updating. Could you please check if the event acxtually exists, or be more specific about when the event occurs?`;
         break;
       }
 
@@ -581,7 +528,7 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
       });
 
       if (!eventJSONsToUpdate || eventJSONsToUpdate.length === 0) {
-        toolResult = `I looked for events matching your description ("${updateIntentParams.userInput}") but couldn't pinpoint specific ones to update.`;
+        toolResult = `I found ${eventsToConsiderForUpdate.length} event(s) in the specified time range, but I couldn't confidently identify which specific event(s) you want to update based on your description ("${updateIntentParams.userInput}"). Could you please be more specific? I dont want to update the wrong events.`;
         break;
       }
 

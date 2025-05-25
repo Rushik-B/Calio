@@ -19,7 +19,7 @@ const eventDateTimeSchemaForTool = z.object({
 
 // Updated schema for attendees, aligning with Google Calendar API structure
 const attendeeSchemaForTool = z.object({
-  email: z.string().email("Invalid email format for attendee."),
+  email: z.string().min(1, "Attendee email/name cannot be empty."), // Allow names, will be processed later
   displayName: z.string().optional(),
   organizer: z.boolean().optional(),
   self: z.boolean().optional(),
@@ -33,7 +33,7 @@ const attendeeSchemaForTool = z.object({
 export const createEventParamsSchema = z.object({
   summary: z.string().optional().describe("Summary or title of the event."),
   description: z.string().optional().describe("Detailed description of the event."),
-  location: z.string().optional().describe("Location of the event."),
+  location: z.string().optional().nullable().describe("Location of the event."),
   start: eventDateTimeSchemaForTool.describe("Start time of the event. Must include date or dateTime."),
   end: eventDateTimeSchemaForTool.describe("End time of the event. Must include date or dateTime."),
   attendees: z.array(attendeeSchemaForTool).optional().describe("Array of attendee objects."),
@@ -101,6 +101,7 @@ function transformToGoogleCalendarEvent(
   params: z.infer<typeof createEventParamsSchema> | z.infer<typeof updateEventParamsSchema>
 ): calendar_v3.Schema$Event {
   const event: calendar_v3.Schema$Event = {};
+  const emailRegex = /\S+@\S+\.\S+/; // Simple regex to check for email format
 
   if ('start' in params && typeof params.start === 'object') { 
     const createParams = params as z.infer<typeof createEventParamsSchema>; 
@@ -112,16 +113,25 @@ function transformToGoogleCalendarEvent(
     event.end = createParams.end as calendar_v3.Schema$EventDateTime;
 
     if (createParams.attendees) {
-      event.attendees = createParams.attendees.map(att => ({ 
-        email: att.email, 
-        displayName: att.displayName,
-        organizer: att.organizer,
-        self: att.self,
-        resource: att.resource,
-        optional: att.optional,
-        responseStatus: att.responseStatus,
-        comment: att.comment,
-      }));
+      event.attendees = createParams.attendees
+        .filter(att => att.email && emailRegex.test(att.email)) // Filter for valid emails
+        .map(att => ({ 
+          email: att.email, 
+          displayName: att.displayName,
+          organizer: att.organizer,
+          self: att.self,
+          resource: att.resource,
+          optional: att.optional,
+          responseStatus: att.responseStatus,
+          comment: att.comment,
+        }));
+      
+      // Log if any attendees were filtered out
+      if (createParams.attendees.length !== (event.attendees?.length || 0)) {
+        const originalEmails = createParams.attendees.map(a => a.email).join(', ');
+        const filteredEmails = event.attendees?.map(a => a.email).join(', ') || 'none';
+        console.warn(`[transformToGoogleCalendarEvent] Some attendees filtered due to invalid email format. Original: [${originalEmails}], Filtered: [${filteredEmails}]`);
+      }
     }
 
     if (createParams.recurrence) event.recurrence = createParams.recurrence;
@@ -157,7 +167,15 @@ function transformToGoogleCalendarEvent(
     if (updateParams.location) event.location = updateParams.location;
     if (updateParams.start) event.start = updateParams.start; // Assume it's already correct object or needs transformation
     if (updateParams.end) event.end = updateParams.end;     // Same assumption
-    if (updateParams.attendees) event.attendees = updateParams.attendees.map((email: string) => ({ email })); // Old structure
+    if (updateParams.attendees && Array.isArray(updateParams.attendees)) {
+        event.attendees = updateParams.attendees
+            .filter((email: string) => email && emailRegex.test(email)) // Also filter here for updates
+            .map((email: string) => ({ email }));
+        
+        if (updateParams.attendees.length !== (event.attendees?.length || 0)) {
+            console.warn(`[transformToGoogleCalendarEvent] Some attendees filtered during update due to invalid email format.`);
+        }
+    }
 
   } else {
       // Fallback to old logic if params don't match new createEvent structure (e.g. for updateEvent if its schema hasn't changed)
@@ -180,8 +198,14 @@ function transformToGoogleCalendarEvent(
         if (Pend.includes('T')) { event.end = { dateTime: Pend }; }
         else { event.end = { date: Pend }; }
       }
-      if ((params as any).attendees) {
-        event.attendees = (params as any).attendees.map((email: string) => ({ email }));
+      if ((params as any).attendees && Array.isArray((params as any).attendees)) {
+        event.attendees = (params as any).attendees
+            .filter((emailItem: any) => typeof emailItem === 'string' && emailRegex.test(emailItem)) // Filter here for fallback
+            .map((email: string) => ({ email }));
+        
+         if ((params as any).attendees.length !== (event.attendees?.length || 0)) {
+            console.warn(`[transformToGoogleCalendarEvent] Some attendees filtered in fallback logic due to invalid email format.`);
+        }
       }
       // other simple fields from old structure
       if((params as any).summary) event.summary = (params as any).summary;

@@ -38,7 +38,7 @@ const calendarActionSchema = z.object({
   location: z.string().optional().describe("The location of the event."),
   start: z.string().optional().describe("The start time of the event in ISO 8601 format. If the user specifies a date but no time for a new event, assume it's an all-day event starting on that date. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the beginning of that day in that timezone (e.g., YYYY-MM-DDT00:00:00+offset or YYYY-MM-DDT00:00:00 if the timezone is UTC)."),
   end: z.string().optional().describe("The end time of the event in ISO 8601 format. If the user specifies a date but no time for a new event, this should be the start of the following day for an all-day event. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the end of that day in that timezone (e.g., YYYY-MM-DDT23:59:59.999+offset or YYYY-MM-DDT23:59:59.999 if the timezone is UTC)."),
-  query: z.string().optional().describe("The search query for listing events."),
+  query: z.string().optional().describe("The search query for listing events. Use ONLY for list_events action. Do NOT use for update_event or delete_event actions."),
   timeMin: z.string().optional().describe("The minimum time for listing events in ISO 8601 format. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the beginning of that day in that timezone (e.g., YYYY-MM-DDT00:00:00+offset or YYYY-MM-DDT00:00:00 if the timezone is UTC)."),
   timeMax: z.string().optional().describe("The maximum time for listing events in ISO 8601 format. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the end of that day in that timezone (e.g., YYYY-MM-DDT23:59:59.999+offset or YYYY-MM-DDT23:59:59.999 if the timezone is UTC)."),
   attendees: z.array(z.string()).optional().describe("A list of email addresses of attendees for the event."),
@@ -103,7 +103,6 @@ export interface UpdateEventIntentParams {
   calendarId?: string; // Calendar ID if planner can determine it
   timeMin?: string;    // Optional: From planner for scoping event search
   timeMax?: string;    // Optional: From planner for scoping event search
-  query?: string;      // Optional: From planner for scoping event search
   anchorEventsContext?: AnchorEventContext[]; // Context events found by orchestrator
 }
 
@@ -325,7 +324,6 @@ export async function generatePlan(
                         calendarId: finalParamsForAction.calendarId,
                         timeMin: finalParamsForAction.timeMin, // For scoping event search
                         timeMax: finalParamsForAction.timeMax, // For scoping event search
-                        query: finalParamsForAction.query,
                         anchorEventsContext: orchestratorParams?.anchorEventsContext // Pass through anchor context
                     }
                 };

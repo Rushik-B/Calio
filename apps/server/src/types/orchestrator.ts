@@ -122,18 +122,12 @@ export interface OrchestratorDecision {
   
   // Common fields for both simple and complex decisions
   responseText?: string | null; 
-  clarificationContextToSave?: {
-    type: 'delete_candidates_for_confirmation' | 'workflow_paused' | string; // Type of context being saved
-    candidates?: DeletionCandidate[]; // List of candidates if type is 'delete_candidates_for_confirmation'
-    originalUserQuery?: string;
-    workflowState?: {
-      workflowId: string;
-      pausedAt: string; // Task ID where workflow was paused
-      dataBus: { [variableName: string]: any }; // Workflow data state
-      remainingTasks: Task[]; // Tasks still to be executed
-    }; // For paused workflows
-    // other context fields
-  } | any; 
+  /**
+   * @deprecated This field is deprecated and will be removed in a future version. 
+   * The system now relies on conversational history analysis for follow-ups.
+   * This will always be null in responses from centralOrchestratorLLM.
+   */
+  clarificationContextToSave?: any | null; 
   reasoning?: string; 
   // Centralized timezone information
   timezoneInfo?: {

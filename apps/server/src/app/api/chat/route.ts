@@ -11,7 +11,7 @@ import { Prisma } from "@prisma/client"; // Import Prisma namespace
 import { getNextAction } from "../../../lib/centralOrchestratorLLM";
 
 import { OrchestratorDecision } from "../../../types/orchestrator";
-import { CreateEventExecutionResult } from "../../../lib/chatController"; // Import new types
+import { CreateEventExecutionResult, PartialCreationWithConflicts } from "../../../lib/chatController"; // Import new types
 
 export async function POST(req: NextRequest) {
   // 1. Get and verify Clerk session token
@@ -377,6 +377,49 @@ export async function POST(req: NextRequest) {
           conflictDetection: executePlanResult
         } as unknown as Prisma.InputJsonValue;
 
+      } else if ('type' in executePlanResult && executePlanResult.type === 'partial_creation_with_conflicts') {
+        // This is PartialCreationWithConflicts object - some events created, others need resolution
+        const partialResult = executePlanResult as PartialCreationWithConflicts;
+        assistantRequiresFollowUp = true;
+        
+        // Save context for resolving remaining conflicts
+        assistantClarificationContext = {
+          type: 'partial_conflict_resolution_pending',
+          createdEvents: partialResult.createdEvents,
+          conflictingEvents: partialResult.conflictingEvents,
+          originalCreationMessages: partialResult.creationMessages
+        } as any as Prisma.JsonObject;
+
+        // Format message showing what was created and what needs resolution
+        let responseMessage = partialResult.message + "\n\n";
+        
+        if (partialResult.creationMessages.length > 0) {
+          responseMessage += "✅ **Successfully created:**\n";
+          partialResult.creationMessages.forEach(msg => {
+            responseMessage += `• ${msg}\n`;
+          });
+          responseMessage += "\n";
+        }
+
+        if (partialResult.conflictingEvents.length > 0) {
+          responseMessage += "⚠️ **Events needing your input:**\n";
+          partialResult.conflictingEvents.forEach((conflict, index) => {
+            responseMessage += `\n**${conflict.proposedEvent.summary || 'Event'}** conflicts with existing events.\n`;
+            responseMessage += "Your options:\n";
+            conflict.suggestions.forEach((suggestion, suggestionIndex) => {
+              responseMessage += `${suggestionIndex + 1}. ${suggestion}\n`;
+            });
+          });
+          responseMessage += "\nPlease let me know how you'd like to resolve these conflicts.";
+        }
+
+        finalResponseToUser = responseMessage;
+        assistantMessageForDb = finalResponseToUser;
+        assistantLlmPrompt = `System prompt for partial creation with conflicts + ${JSON.stringify(partialResult)}`;
+        assistantToolResult = {
+          partialCreationWithConflicts: partialResult
+        } as unknown as Prisma.InputJsonValue;
+
       } else {
         // This is CreateEventExecutionResult
         const createResult = executePlanResult as CreateEventExecutionResult; 
@@ -716,6 +759,49 @@ export async function POST(req: NextRequest) {
         assistantLlmPrompt = `System prompt for conflict resolution + ${JSON.stringify(executePlanResult)}`;
         assistantToolResult = {
           conflictDetection: executePlanResult
+        } as unknown as Prisma.InputJsonValue;
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'partial_creation_with_conflicts') {
+        // This is PartialCreationWithConflicts object - some events created, others need resolution
+        const partialResult = executePlanResult as PartialCreationWithConflicts;
+        assistantRequiresFollowUp = true;
+        
+        // Save context for resolving remaining conflicts
+        assistantClarificationContext = {
+          type: 'partial_conflict_resolution_pending',
+          createdEvents: partialResult.createdEvents,
+          conflictingEvents: partialResult.conflictingEvents,
+          originalCreationMessages: partialResult.creationMessages
+        } as any as Prisma.JsonObject;
+
+        // Format message showing what was created and what needs resolution
+        let responseMessage = partialResult.message + "\n\n";
+        
+        if (partialResult.creationMessages.length > 0) {
+          responseMessage += "✅ **Successfully created:**\n";
+          partialResult.creationMessages.forEach(msg => {
+            responseMessage += `• ${msg}\n`;
+          });
+          responseMessage += "\n";
+        }
+
+        if (partialResult.conflictingEvents.length > 0) {
+          responseMessage += "⚠️ **Events needing your input:**\n";
+          partialResult.conflictingEvents.forEach((conflict, index) => {
+            responseMessage += `\n**${conflict.proposedEvent.summary || 'Event'}** conflicts with existing events.\n`;
+            responseMessage += "Your options:\n";
+            conflict.suggestions.forEach((suggestion, suggestionIndex) => {
+              responseMessage += `${suggestionIndex + 1}. ${suggestion}\n`;
+            });
+          });
+          responseMessage += "\nPlease let me know how you'd like to resolve these conflicts.";
+        }
+
+        finalResponseToUser = responseMessage;
+        assistantMessageForDb = finalResponseToUser;
+        assistantLlmPrompt = `System prompt for partial creation with conflicts + ${JSON.stringify(partialResult)}`;
+        assistantToolResult = {
+          partialCreationWithConflicts: partialResult
         } as unknown as Prisma.InputJsonValue;
 
       } else {

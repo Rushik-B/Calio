@@ -16,7 +16,7 @@ const eventDateTimeSchema = z.object({
 
 // Schema for attendees
 const attendeeSchema = z.object({
-  email: z.string().email("Invalid email format for attendee."),
+  email: z.string().min(1, "Attendee email/name cannot be empty."), // Allow names, will be processed later
   displayName: z.string().optional(),
   organizer: z.boolean().optional(),
   self: z.boolean().optional(),
