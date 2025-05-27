@@ -3,6 +3,7 @@ import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { promises as fsPromises } from 'fs';
 import path from "path";
+import type { calendar_v3 } from "googleapis";
 
 // Schema for event date/time (aligns with Google Calendar API)
 const eventDateTimeSchema = z.object({
@@ -15,7 +16,7 @@ const eventDateTimeSchema = z.object({
 
 // Schema for attendees
 const attendeeSchema = z.object({
-  email: z.string().email("Invalid email format for attendee."),
+  email: z.string().min(1, "Attendee email/name cannot be empty."), // Allow names, will be processed later
   displayName: z.string().optional(),
   organizer: z.boolean().optional(),
   self: z.boolean().optional(),
@@ -98,51 +99,141 @@ export const eventCreationRequestListSchema = z.array(googleCalendarEventCreateO
 // Path to the new prompt file
 const eventCreatorSystemPromptPath = path.join(process.cwd(), 'src', 'prompts', 'eventCreatorPrompt.md');
 
-export async function generateEventCreationJSONs(params: {
+// Define a type for the anchor event context
+interface AnchorEventContext {
+  id?: string | null; // Event ID for updates/deletes
+  summary?: string | null;
+  start?: { date?: string; dateTime?: string; timeZone?: string } | null;
+  end?: { date?: string; dateTime?: string; timeZone?: string } | null;
+  calendarId?: string | null;
+}
+
+// Schema for conflict detection
+export const conflictEventSchema = z.object({
+  id: z.string(),
+  summary: z.string(),
+  start: z.string(),
+  end: z.string(),
+  calendarId: z.string()
+});
+
+export const eventConflictResponseSchema = z.object({
+  type: z.literal("conflict_detected"),
+  message: z.string().describe("User-friendly message explaining the conflict"),
+  proposedEvents: z.array(googleCalendarEventCreateObjectSchema),
+  conflictingEvents: z.array(conflictEventSchema),
+  suggestions: z.array(z.string()).describe("Array of suggested alternatives")
+});
+
+export const eventCreationOrConflictSchema = z.union([
+  z.object({
+    type: z.literal("events_created"),
+    events: eventCreationRequestListSchema
+  }),
+  eventConflictResponseSchema
+]);
+
+// Enhanced function that can return either events or conflict detection
+export async function generateEventCreationJSONsWithConflictDetection(params: {
   userInput: string;
   userTimezone: string;
   userCalendarsFormatted: string; 
-  // Add current time for LLM context if needed, though prompt focuses on user input interpretation
   currentTimeISO?: string; 
-}): Promise<z.infer<typeof eventCreationRequestListSchema>> {
+  anchorEventsContext?: AnchorEventContext[];
+  existingEventsForConflictCheck?: calendar_v3.Schema$Event[]; // New parameter for conflict checking
+  timezoneInfo?: { // NEW: Centralized timezone information
+    timezone: string;
+    offset: string;
+    userLocalTime: string;
+    currentTimeInUserTZ: string;
+    dates: {
+      today: string;
+      tomorrow: string;
+      yesterday: string;
+    };
+    isoStrings: {
+      todayStart: string;
+      todayEnd: string;
+      tomorrowStart: string;
+      tomorrowEnd: string;
+      yesterdayStart: string;
+      yesterdayEnd: string;
+      currentTime: string;
+    };
+  };
+}): Promise<z.infer<typeof eventCreationOrConflictSchema>> {
   
   let systemPromptContent = await fsPromises.readFile(eventCreatorSystemPromptPath, 'utf-8');
-  // DO NOT replace placeholders in the systemPromptContent anymore.
-  // systemPromptContent = systemPromptContent.replace("{userInput}", params.userInput); 
-  // systemPromptContent = systemPromptContent.replace("{userTimezone}", params.userTimezone);
-  // systemPromptContent = systemPromptContent.replace("{userCalendarList}", params.userCalendarsFormatted);
-  // if(params.currentTimeISO){
-  //     systemPromptContent = systemPromptContent.replace("{currentTimeISO}", params.currentTimeISO); 
-  // } else {
-  //     systemPromptContent = systemPromptContent.replace("{currentTimeISO}", new Date().toISOString()); 
-  // }
 
   const model = new ChatGoogleGenerativeAI({
-    model: "gemini-2.0-flash", // Or your preferred model
-    temperature: 0.1, // Low temperature for more deterministic JSON output
-    // Ensure model is configured for JSON output if the API supports it explicitly
-    // For Gemini, it's usually handled by asking for JSON in the prompt.
+    model: "gemini-2.0-flash",
+    temperature: 0.1,
   });
 
-  // The prompt itself asks for JSON, so a specific JSON mode in .bind might not be needed
-  // unless the model consistently fails to produce parseable JSON.
-  // For now, relying on prompt instructions for JSON output.
-
-  // System message contains the main instructions and context now, including the user query for this specialized LLM.
-  const messages = [
-    new SystemMessage(systemPromptContent),
-    new HumanMessage(
-      `Here is the context for creating calendar events:
+  let humanMessageContent = `Here is the context for creating calendar events:
 User Input: "${params.userInput}"
 User Timezone: "${params.userTimezone}"
 User Calendar List: "${params.userCalendarsFormatted}"
-Current Time ISO: "${params.currentTimeISO || new Date().toISOString()}"
+Current Time ISO: "${params.currentTimeISO || new Date().toISOString()}"`;
 
-Based on this context and your instructions (provided in the system message), please generate the JSON list of event objects adhering to the schema and examples you were given.`
-    ), 
+  // Use centralized timezone information if available
+  if (params.timezoneInfo) {
+    humanMessageContent += `
+Timezone Information (PRE-CALCULATED - DO NOT RECALCULATE):
+- Current Time in User TZ: ${params.timezoneInfo.currentTimeInUserTZ}
+- User Local Time: ${params.timezoneInfo.userLocalTime}
+- Timezone Offset: ${params.timezoneInfo.offset}
+- Today's Date: ${params.timezoneInfo.dates.today}
+- Tomorrow's Date: ${params.timezoneInfo.dates.tomorrow}
+- Yesterday's Date: ${params.timezoneInfo.dates.yesterday}
+- Today Start: ${params.timezoneInfo.isoStrings.todayStart}
+- Today End: ${params.timezoneInfo.isoStrings.todayEnd}
+- Tomorrow Start: ${params.timezoneInfo.isoStrings.tomorrowStart}
+- Tomorrow End: ${params.timezoneInfo.isoStrings.tomorrowEnd}
+
+IMPORTANT: Use these PRE-CALCULATED values. Do NOT calculate dates or times yourself.`;
+  }
+
+  if (params.anchorEventsContext && params.anchorEventsContext.length > 0) {
+    humanMessageContent += `\n\nAnchor Events Context (use these as precise references for timing any new events relative to them):\n${JSON.stringify(params.anchorEventsContext, null, 2)}`;
+  }
+
+  if (params.existingEventsForConflictCheck && params.existingEventsForConflictCheck.length > 0) {
+    const conflictCheckEvents = params.existingEventsForConflictCheck.map(event => ({
+      id: event.id,
+      summary: event.summary,
+      start: event.start?.dateTime || event.start?.date,
+      end: event.end?.dateTime || event.end?.date,
+      calendarId: (event as any).calendarId || "primary" // Get calendarId from the event object
+    }));
+    
+    humanMessageContent += `\n\nExisting Events for Conflict Checking:\n${JSON.stringify(conflictCheckEvents, null, 2)}
+    
+IMPORTANT: Before creating any events, check if the proposed new events would conflict (overlap in time) with any of these existing events. If conflicts are detected:
+1. Return a conflict response object with type "conflict_detected"
+2. List the conflicting events
+3. Provide user-friendly suggestions for resolution
+4. Include the proposed events that would cause conflicts
+
+If NO conflicts are detected, proceed with normal event creation and return events with type "events_created".`;
+  }
+
+  humanMessageContent += `\n\nBased on ALL this context and your instructions (provided in the system message), please generate either:
+1. A JSON list of event objects (if no conflicts) with structure: {"type": "events_created", "events": [...]}
+2. A conflict detection response (if conflicts found) with structure: {"type": "conflict_detected", "message": "...", "proposedEvents": [...], "conflictingEvents": [...], "suggestions": [...]}`;
+  
+  const messages = [
+    new SystemMessage(systemPromptContent),
+    new HumanMessage(humanMessageContent), 
   ];
 
-  console.log(`[EventCreatorLLM] Generating event JSONs for input: "${params.userInput}", userTimezone: ${params.userTimezone}`);
+  console.log(`[EventCreatorLLM] Generating event JSONs with conflict detection for input: "${params.userInput}", userTimezone: ${params.userTimezone}`);
+  if (params.anchorEventsContext) {
+    console.log('[EventCreatorLLM] Anchor Events Context:', JSON.stringify(params.anchorEventsContext, null, 2));
+  }
+  if (params.existingEventsForConflictCheck) {
+    console.log(`[EventCreatorLLM] Checking conflicts against ${params.existingEventsForConflictCheck.length} existing events`);
+  }
 
   try {
     const result = await model.invoke(messages);
@@ -164,30 +255,152 @@ Based on this context and your instructions (provided in the system message), pl
     }
     llmOutput = llmOutput.trim();
 
-    // Ensure the output is an array (starts with [ and ends with ])
-    if (!llmOutput.startsWith("[") || !llmOutput.endsWith("]")) {
-        console.warn("[EventCreatorLLM] LLM output does not appear to be a JSON array. Attempting to parse anyway. Output:", llmOutput);
-        // If it's a single object, wrap it in an array for robust parsing by the schema
-        if (llmOutput.startsWith("{") && llmOutput.endsWith("}")) {
-            console.log("[EventCreatorLLM] Wrapping single JSON object output in an array.");
-            llmOutput = `[${llmOutput}]`;
-        }
-        // If it's still not an array, parsing will likely fail, which is caught below.
-    }
-
-    const parsedEventList = JSON.parse(llmOutput);
-    const validatedEventList = eventCreationRequestListSchema.parse(parsedEventList);
+    const parsedResponse = JSON.parse(llmOutput);
+    const validatedResponse = eventCreationOrConflictSchema.parse(parsedResponse);
     
-    console.log("[EventCreatorLLM] Successfully validated event list:", JSON.stringify(validatedEventList, null, 2));
-    return validatedEventList;
+    console.log("[EventCreatorLLM] Successfully validated response:", JSON.stringify(validatedResponse, null, 2));
+    return validatedResponse;
 
   } catch (error: unknown) {
     console.error("[EventCreatorLLM] Error generating or validating event JSONs:", error);
     if (error instanceof z.ZodError) {
       console.error("[EventCreatorLLM] Zod Validation Errors:", JSON.stringify(error.format(), null, 2));
     }
-    // In case of error, return an empty list or re-throw, depending on desired handling
-    // For now, returning empty list to prevent flow stoppage, but controller should handle this.
-    return []; 
+    // Fallback to non-conflict version
+    return {
+      type: "events_created",
+      events: []
+    };
+  }
+}
+
+// Simple function that just returns event arrays (no conflict detection)
+export async function generateEventCreationJSONs(params: {
+  userInput: string;
+  userTimezone: string;
+  userCalendarsFormatted: string; 
+  currentTimeISO?: string; 
+  anchorEventsContext?: AnchorEventContext[];
+  existingEventsForConflictCheck?: calendar_v3.Schema$Event[]; // New parameter for conditional logic evaluation
+  timezoneInfo?: { // NEW: Centralized timezone information
+    timezone: string;
+    offset: string;
+    userLocalTime: string;
+    currentTimeInUserTZ: string;
+    dates: {
+      today: string;
+      tomorrow: string;
+      yesterday: string;
+    };
+    isoStrings: {
+      todayStart: string;
+      todayEnd: string;
+      tomorrowStart: string;
+      tomorrowEnd: string;
+      yesterdayStart: string;
+      yesterdayEnd: string;
+      currentTime: string;
+    };
+  };
+}): Promise<z.infer<typeof eventCreationRequestListSchema>> {
+  
+  let systemPromptContent = await fsPromises.readFile(eventCreatorSystemPromptPath, 'utf-8');
+
+  const model = new ChatGoogleGenerativeAI({
+    model: "gemini-2.0-flash",
+    temperature: 0.1,
+  });
+
+  let humanMessageContent = `Here is the context for creating calendar events:
+User Input: "${params.userInput}"
+User Timezone: "${params.userTimezone}"
+User Calendar List: "${params.userCalendarsFormatted}"
+Current Time ISO: "${params.currentTimeISO || new Date().toISOString()}"`;
+
+  // Use centralized timezone information if available
+  if (params.timezoneInfo) {
+    humanMessageContent += `
+Timezone Information (PRE-CALCULATED - DO NOT RECALCULATE):
+- Current Time in User TZ: ${params.timezoneInfo.currentTimeInUserTZ}
+- User Local Time: ${params.timezoneInfo.userLocalTime}
+- Timezone Offset: ${params.timezoneInfo.offset}
+- Today's Date: ${params.timezoneInfo.dates.today}
+- Tomorrow's Date: ${params.timezoneInfo.dates.tomorrow}
+- Yesterday's Date: ${params.timezoneInfo.dates.yesterday}
+- Today Start: ${params.timezoneInfo.isoStrings.todayStart}
+- Today End: ${params.timezoneInfo.isoStrings.todayEnd}
+- Tomorrow Start: ${params.timezoneInfo.isoStrings.tomorrowStart}
+- Tomorrow End: ${params.timezoneInfo.isoStrings.tomorrowEnd}
+
+IMPORTANT: Use these PRE-CALCULATED values. Do NOT calculate dates or times yourself.`;
+  }
+
+  if (params.anchorEventsContext && params.anchorEventsContext.length > 0) {
+    humanMessageContent += `\n\nAnchor Events Context (use these as precise references for timing any new events relative to them):\n${JSON.stringify(params.anchorEventsContext, null, 2)}`;
+  }
+
+  if (params.existingEventsForConflictCheck && params.existingEventsForConflictCheck.length > 0) {
+    const conflictCheckEvents = params.existingEventsForConflictCheck.map(event => ({
+      id: event.id,
+      summary: event.summary,
+      start: event.start?.dateTime || event.start?.date,
+      end: event.end?.dateTime || event.end?.date,
+      calendarId: (event as any).calendarId || "primary" // Get calendarId from the event object
+    }));
+    
+    humanMessageContent += `\n\nExisting Events for Conditional Logic Evaluation:\n${JSON.stringify(conflictCheckEvents, null, 2)}
+    
+IMPORTANT: If your user input contains conditional language like "if that conflicts", "but if there's a conflict", "unless it overlaps", etc., you MUST evaluate the condition using these existing events:
+1. Check if the proposed primary time would conflict (overlap) with any of these existing events
+2. If conflict exists, follow the user's alternative instruction (e.g., "schedule it as late as possible", "move it to Friday")
+3. Create only ONE event based on the evaluation result
+4. Use mathematical overlap detection: start1 < end2 && start2 < end1`;
+  }
+
+  humanMessageContent += `\n\nBased on ALL this context and your instructions (provided in the system message), please generate a JSON array of event objects to create.`;
+  
+  const messages = [
+    new SystemMessage(systemPromptContent),
+    new HumanMessage(humanMessageContent), 
+  ];
+
+  console.log(`[EventCreatorLLM] Generating event JSONs for input: "${params.userInput}", userTimezone: ${params.userTimezone}`);
+  if (params.anchorEventsContext) {
+    console.log('[EventCreatorLLM] Anchor Events Context:', JSON.stringify(params.anchorEventsContext, null, 2));
+  }
+
+  try {
+    const result = await model.invoke(messages);
+    let llmOutput = result.content;
+
+    if (typeof llmOutput !== 'string') {
+      console.error("[EventCreatorLLM] LLM output was not a string:", llmOutput);
+      throw new Error("LLM output is not in the expected string format.");
+    }
+    console.log("[EventCreatorLLM] Raw LLM output string:", llmOutput);
+
+    // Clean the output: remove markdown code block fences if present
+    llmOutput = llmOutput.trim();
+    if (llmOutput.startsWith("```json")) {
+      llmOutput = llmOutput.substring(7);
+      if (llmOutput.endsWith("```")) {
+        llmOutput = llmOutput.substring(0, llmOutput.length - 3);
+      }
+    }
+    llmOutput = llmOutput.trim();
+
+    const parsedResponse = JSON.parse(llmOutput);
+    const validatedResponse = eventCreationRequestListSchema.parse(parsedResponse);
+    
+    console.log("[EventCreatorLLM] Successfully validated response:", JSON.stringify(validatedResponse, null, 2));
+    return validatedResponse;
+
+  } catch (error: unknown) {
+    console.error("[EventCreatorLLM] Error generating or validating event JSONs:", error);
+    if (error instanceof z.ZodError) {
+      console.error("[EventCreatorLLM] Zod Validation Errors:", JSON.stringify(error.format(), null, 2));
+    }
+    // Return empty array on error
+    return [];
   }
 } 

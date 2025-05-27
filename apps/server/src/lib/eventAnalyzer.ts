@@ -12,7 +12,7 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env.development") });
 // Initialize the Google Generative AI model for chat analysis
 // Ensure GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY is in your .env.development
 const analysisModel = new ChatGoogleGenerativeAI({
-  model: "gemini-1.5-flash-latest", // Or your preferred model for analysis
+  model: "gemini-2.0-flash", // Or your preferred model for analysis
   temperature: 0.3, // Lower temperature for more factual, less creative analysis
 });
 
@@ -23,6 +23,9 @@ Based *only* on the calendar events provided in the user's message, answer their
 - If the events provided do not contain enough information to definitively answer the question, state that clearly.
 - Do not ask for clarification on date ranges or event details if the information is not present in the provided events; instead, indicate what information is missing based on the events at hand.
 - When referring to event times in your answer, present them in a natural way (e.g., "at 2:30 PM"). If you need to specify the timezone, use the provided user's timezone name (e.g., "America/Vancouver") rather than just the offset.
+- **When your answer refers to a specific event, try to include its summary in your response (e.g., "Your event 'Team Meeting' is at 2:30 PM").**
+- **Understand that users may use various terms for similar types of events (e.g., asking for "classes" might refer to events titled "lectures", "tutorials", or "seminars"; asking for "meetings" might refer to "appointments" or "syncs"). Focus on matching the user's likely intent to the event summaries and details provided.**
+- **If calculations like summing durations are needed, be meticulous and double-check your arithmetic before providing the final number.**
 - Present your answer clearly and concisely.
 `;
 

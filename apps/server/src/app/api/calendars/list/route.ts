@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { clerkClient, OauthAccessToken } from "@clerk/clerk-sdk-node";
+import { clerkClient } from "@clerk/clerk-sdk-node";
 import { getUserCalendarList } from "@/lib/googleCalendar";
 
 export async function GET(req: NextRequest) {
