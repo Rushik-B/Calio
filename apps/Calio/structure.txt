@@ -1,0 +1,70 @@
+## This file Contains the whole structure of the Calio directory. Use this file to reference the file structure.
+##Always update this file after making any changes to the directory structure or adding/ deleting any files.
+
+
+.
+├── README.md
+├── app
+│   ├── (auth)
+│   │   ├── _layout.tsx
+│   │   └── sign-in.tsx
+│   ├── (home)
+│   │   ├── _layout.tsx
+│   │   └── index.tsx
+│   ├── (main)
+│   │   ├── _layout.tsx
+│   │   ├── index.tsx
+│   │   ├── week.tsx
+│   │   ├── actions.tsx
+│   │   ├── settings.tsx
+│   │   ├── calendar-settings.tsx
+│   │   └── summary.tsx
+│   ├── (onboarding)
+│   │   ├── _layout.tsx
+│   │   ├── index.tsx
+│   │   ├── welcome.tsx
+│   │   ├── priorities.tsx
+│   │   ├── preferences.tsx
+│   │   ├── constraints.tsx
+│   │   ├── calendar-connection.tsx
+│   │   ├── notifications.tsx
+│   │   └── summary.tsx
+│   ├── api
+│   │   └── calendar
+│   │       ├── types.ts
+│   │       └── client.ts
+│   ├── _layout.tsx
+│   ├── components
+│   │   ├── chat
+│   │   │   ├── CalendarSelector.tsx
+│   │   │   ├── ChatHeader.tsx
+│   │   │   ├── ChatInput.tsx
+│   │   │   ├── MessageItem.tsx
+│   │   │   ├── MessageList.tsx
+│   │   │   └── SignedOutMessage.tsx
+│   │   ├── OnboardingContext.tsx
+│   │   ├── SignOutButton.tsx
+│   │   ├── QuickActionBar.tsx
+│   │   ├── FloatingActionButton.tsx
+│   │   ├── ActionConfirmation.tsx
+│   │   └── CalendarCache.tsx
+│   └── index.tsx
+├── app.json
+├── assets
+│   ├── fonts
+│   │   └── SpaceMono-Regular.ttf
+│   └── images
+│       ├── adaptive-icon.png
+│       ├── favicon.png
+│       ├── icon.png
+│       ├── partial-react-logo.png
+│       ├── react-logo.png
+│       ├── react-logo@2x.png
+│       ├── react-logo@3x.png
+│       └── splash-icon.png
+├── eslint.config.js
+├── expo-env.d.ts
+├── package-lock.json
+├── package.json
+├── pnpm-lock.yaml
+└── tsconfig.json
