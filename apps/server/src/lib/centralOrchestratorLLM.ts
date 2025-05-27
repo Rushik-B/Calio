@@ -3,73 +3,87 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ConversationTurn } from "@prisma/client";
 import {
   OrchestratorDecision,
-  OrchestratorActionType,
-  DeletionCandidate,
-  WorkflowDefinition,
+  ICAOutput,
+  // OrchestratorActionType, // Not directly used here anymore, inferred by AWD
+  // DeletionCandidate, // Handled by AWD if needed
+  // WorkflowDefinition, // Defined by AWD
 } from "../types/orchestrator";
-import { ZodError } from "zod";
-import { z } from "zod"; // For parsing LLM JSON output
+import { ZodError, z } from "zod"; // For parsing LLM JSON output
+import fs from "fs"; // Using fs directly for prompt reading
+import path from "path";
 
-// Environment variables should be loaded by the main application process (e.g., in route.ts or a global setup)
-// Ensure GOOGLE_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY is available in the environment.
+// Environment variables should be loaded by the main application process
 
+const ICA_PROMPT_PATH = path.join(process.cwd(), 'src', 'prompts', 'intentContextAnalyzerPrompt.md');
+const AWD_PROMPT_PATH = path.join(process.cwd(), 'src', 'prompts', 'orchestratorDecompositionPrompt.md');
 
-//OG
-
-const orchestratorLLM = new ChatGoogleGenerativeAI({
-  model: "gemini-2.0-flash",
-  temperature: 0.3, // Lower temperature for more predictable decisions
+// LLM for Intent & Context Analysis
+const icaLLM = new ChatGoogleGenerativeAI({
+  model: "gemini-1.5-flash-latest", // Or your preferred model
+  temperature: 0.2, // Fine-tune as needed
 });
 
-// Schema for the expected JSON output from the LLM for its decision
-const llmDecisionSchema = z.object({
-  // For simple actions (backward compatibility)
+// LLM for Action & Workflow Decomposition
+const awdLLM = new ChatGoogleGenerativeAI({
+  model: "gemini-1.5-flash-latest", // Or your preferred model
+  temperature: 0.3, // Fine-tune as needed
+});
+
+// Schema for the ICA-LLM's expected JSON output (subset of what's in the prompt for validation here)
+const icaOutputSchema: z.ZodType<ICAOutput> = z.object({
+  analysis: z.object({
+    isFollowUp: z.boolean(),
+    followUpType: z.string(),
+    certainty: z.string(),
+  }),
+  currentUserMessage: z.string(),
+  reconstructedUserInputForPlanner: z.string().nullable(),
+  originalRequestContext: z.object({
+    assistantLastRelevantTurnNumber: z.number().nullable().optional(),
+    assistantLastResponseSummary: z.string().nullable().optional(),
+    originalUserQueryText: z.string().nullable().optional(),
+    relatedActionTypeFromHistory: z.string().nullable().optional(),
+  }).nullable(),
+  entitiesInCurrentMessage: z.array(z.string()),
+  userIntentSummary: z.string(),
+  requiresImmediatePlannerCall: z.boolean(),
+  historyForAWD: z.string().nullable(),
+  userTimezone: z.string(),
+  userCalendarsFormatted: z.string(),
+  timezoneInfo: z.object({
+    timezone: z.string(),
+    offset: z.string(),
+    userLocalTime: z.string(),
+    currentTimeInUserTZ: z.string(),
+    dates: z.object({
+      today: z.string(),
+      tomorrow: z.string(),
+      yesterday: z.string(),
+    }),
+    isoStrings: z.object({
+      todayStart: z.string(),
+      todayEnd: z.string(),
+      tomorrowStart: z.string(),
+      tomorrowEnd: z.string(),
+      yesterdayStart: z.string(),
+      yesterdayEnd: z.string(),
+      currentTime: z.string(),
+    }),
+  }),
+});
+
+// Schema for the AWD-LLM's expected JSON output (main orchestrator decision)
+const awdOutputSchema = z.object({
   actionType: z.enum([
     "call_planner",
     "fetch_context_and_call_planner",
     "respond_directly",
     "ask_user_question",
-    "ask_user_clarification_for_tool_ambiguity",
+    "ask_user_clarification_for_tool_ambiguity", // Retaining for potential AWD use
     "perform_google_calendar_action",
-    "execute_workflow", // New: Indicates a workflow should be executed
+    "execute_workflow",
   ]).optional(),
-  params: z
-    .object({
-      userInput: z.string().optional(), // User input might be passed to planner
-      originalRequestNature: z
-        .enum(["singular", "plural_or_unspecified"])
-        .nullable()
-        .optional(), // Hint for deletion requests
-      // Fields for when actionType is 'ask_user_clarification_for_tool_ambiguity'
-      // The candidates themselves are passed in the main prompt to the LLM in this flow
-      // but LLM might decide to put some processed version or original query here.
-      originalUserQueryForClarification: z.string().optional(),
-      // Params for perform_google_calendar_action
-      GCToolName: z.string().optional(),
-      GCToolArgs: z.any().optional(),
-      // Params for fetch_context_and_call_planner
-      contextQuery: z.string().optional(),
-      contextTimeMin: z.string().optional(),
-      contextTimeMax: z.string().optional(),
-      contextCalendarIds: z.array(z.string()).nullable().optional(),
-      timeMin: z.string().nullable().optional(),
-      timeMax: z.string().nullable().optional(),
-      anchorEventsContext: z
-        .array(
-          z.object({
-            summary: z.string(),
-            start: z.string(),
-            end: z.string(),
-            calendarId: z.string(),
-          })
-        )
-        .nullable()
-        .optional(),
-    })
-    .passthrough()
-    .optional(),
-  
-  // For complex workflows (new capability)
+  params: z.any().optional(), // Allow any params, specific tools will validate
   workflowDefinition: z.object({
     name: z.string(),
     description: z.string().optional(),
@@ -79,21 +93,18 @@ const llmDecisionSchema = z.object({
       params: z.any().optional(),
       dependsOn: z.array(z.string()).optional(),
       humanSummary: z.string().optional(),
-      outputVariable: z.string().optional(),
+      outputVariable: z.string().optional(), // Added for completeness
       status: z.enum(['pending', 'ready', 'running', 'completed', 'failed', 'waiting_for_user']).optional(),
       result: z.any().optional(),
       retries: z.number().optional(),
     }))
   }).nullable().optional(),
-  
-  // Common fields
   responseText: z.string().nullable().optional(),
   reasoning: z.string().optional(),
-  // We need a way for the LLM to suggest what to save for context if it asks a question
-  // This will be structured by the calling route based on OrchestratorDecision type from `../types/orchestrator`
-  // THIS FIELD IS DEPRECATED AND WILL BE REMOVED. RELY ON CONVERSATIONAL HISTORY ANALYSIS.
-  clarificationContextToSave: z.any().optional(), 
+  clarificationContextToSave: z.null().describe("MUST ALWAYS be null."), // Enforce null
 });
+
+//OG
 
 // Makes a nice string of the conversation history for the LLM to see
 function formatConversationHistoryForPrompt(history: ConversationTurn[]): string {
@@ -273,258 +284,148 @@ function calculateTimezoneInfo(userTimezone: string) {
   };
 }
 
+async function invokeLLM(llm: ChatGoogleGenerativeAI, systemPrompt: string, userMessage: string): Promise<string> {
+  const messages = [new SystemMessage(systemPrompt), new HumanMessage(userMessage)];
+  const result = await llm.invoke(messages);
+  let llmOutputText = "";
+  if (typeof result.content === "string") {
+    llmOutputText = result.content;
+  } else if (Array.isArray(result.content)) {
+    llmOutputText = result.content
+      .filter((part) => part.type === "text")
+      .map((part) => (part as any).text)
+      .join("");
+  }
+  return llmOutputText.trim().replace(/^```json\s*/, "").replace(/\s*```$/, "");
+}
+
 export async function getNextAction(
   conversationHistory: ConversationTurn[],
   currentUserMessage: string,
   userTimezone: string,
   userCalendarsFormatted: string,
-  isClarificationRequest?: boolean // New optional flag
+  isClarificationRequest?: boolean // This flag is now mainly for system-initiated clarifications, not direct ICA output control
 ): Promise<OrchestratorDecision> {
   const formattedHistory = formatConversationHistoryForPrompt(conversationHistory);
-  
-  // CENTRALIZED TIMEZONE CALCULATION - This is the ONLY place where timezone calculations happen
   const timezoneInfo = calculateTimezoneInfo(userTimezone);
-  
-  // WORKFLOW PAUSED DETECTION - Check if we need to resume a paused workflow
-  // This is the ONLY clarificationContext mode we still support for workflow state management
-  const lastAssistantTurnWithContext = conversationHistory
-    .slice()
-    .reverse()
-    .find(turn => 
-      turn.actor === 'ASSISTANT' && 
-      turn.clarificationContext && 
-      typeof turn.clarificationContext === 'object' &&
-      !Array.isArray(turn.clarificationContext) &&
-      (turn.clarificationContext as any).type === 'workflow_paused'
-    );
 
-  if (lastAssistantTurnWithContext?.clarificationContext && 
-      typeof lastAssistantTurnWithContext.clarificationContext === 'object' &&
-      !Array.isArray(lastAssistantTurnWithContext.clarificationContext) &&
-      (lastAssistantTurnWithContext.clarificationContext as any).type === 'workflow_paused') {
-    // Check if this is a recent workflow pause (within last 3 turns)
-    const lastAssistantTurnIndex = conversationHistory.findIndex(turn => turn.id === lastAssistantTurnWithContext.id);
-    const isRecentPause = lastAssistantTurnIndex >= conversationHistory.length - 3;
-    
-    if (isRecentPause) {
-      console.log("[CentralOrchestratorLLM] Mode: Workflow Resumption - Detected recent workflow_paused context");
-      const contextObj = lastAssistantTurnWithContext.clarificationContext as any;
-      return {
-        actionType: "execute_workflow",
-        params: {
-          userInput: currentUserMessage,
-          resumeFromPaused: true,
-          pausedTaskId: contextObj.pausedTaskId,
-          workflowState: contextObj.workflowState
-        },
-        responseText: null,
-        reasoning: "Resuming paused workflow based on user response",
-        clarificationContextToSave: null,
-        timezoneInfo: timezoneInfo,
-      };
-    } else {
-      console.log("[CentralOrchestratorLLM] Found old workflow_paused context, treating as regular conversation");
-    }
+  let icaSystemPrompt: string;
+  try {
+    icaSystemPrompt = fs.readFileSync(ICA_PROMPT_PATH, 'utf8');
+  } catch (error) {
+    console.error("[CentralOrchestratorLLM] FATAL: Could not read ICA prompt from ", ICA_PROMPT_PATH, error);
+    // Fallback to a very basic prompt if file read fails, to prevent total crash
+    icaSystemPrompt = "You are an intent analyzer. Analyze the user message in context of history. Output JSON.";
   }
   
-  let systemPromptContent: string;
+  // Prepare ICA-LLM input specifically
+  const icaPromptInputForSystem = `## Inputs:
+1. currentUserMessage: ${JSON.stringify(currentUserMessage)}
+2. conversationHistory:
+${formattedHistory}
+3. userTimezone: ${JSON.stringify(userTimezone)}
+4. userCalendarsFormatted: ${JSON.stringify(userCalendarsFormatted)}
+5. timezoneInfo: ${JSON.stringify(timezoneInfo)}
 
-  // DEPRECATED: activeClarificationContext is no longer used for primary state management.
-  // The LLM will rely on conversation history analysis as per the main prompt.
+Your task is to provide a JSON output based on these inputs, adhering to the schema and instructions in your main system prompt.`;
 
-  // Handle system-initiated clarification request generation FIRST
-  if (isClarificationRequest) {
-    /* -------------------------------------------------------------------------- */
-    /*            Mode: System-initiated Clarification Question Generation        */
-    /* -------------------------------------------------------------------------- */
-    console.log("[CentralOrchestratorLLM] Mode: System-initiated Clarification Question Generation");
-    systemPromptContent = `You are a helpful calendar assistant. The system requires you to ask the user a question to resolve an ambiguity or get more information.
-    Based on the following system request, formulate a clear and concise question for the user.
-    System Request Details: ${currentUserMessage}
-    User's Timezone: ${userTimezone}
-    Focus on asking the question naturally. The user's actual response will be handled in a subsequent turn where the main orchestrator analyzes the conversation history.
-    Output your question in the 'responseText' field of the JSON object.
-    Example output:
-    {
-      "actionType": "ask_user_question",
-      "responseText": "<Your formulated question to the user>",
-      "reasoning": "Formulating question based on system request for clarification.",
-      "clarificationContextToSave": null 
-    }
-    `;
-  } else {
-    /* -------------------------------------------------------------------------- */
-    /*      Mode: Standard Request Processing (Handles history analysis)         */
-    /* -------------------------------------------------------------------------- */
-    console.log("[CentralOrchestratorLLM] Mode: Standard Request Processing with History Analysis");
-    let baseWorkflowPrompt = "";
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      const promptPath = path.join(process.cwd(), 'src/prompts/orchestratorDecompositionPrompt.md');
-      baseWorkflowPrompt = fs.readFileSync(promptPath, 'utf8');
-    } catch (error) {
-      console.error("[CentralOrchestratorLLM] Could not read orchestratorDecompositionPrompt.md:", error);
-      baseWorkflowPrompt = `# Basic Calendar Assistant Orchestrator\n\nYou are a calendar assistant. Decide the best action based on conversation history.`;
-    }
-
-    systemPromptContent = `${baseWorkflowPrompt}\n\n## Current Context for Decision Making\nUser's Timezone: ${userTimezone}\nUser's Available Calendars: ${userCalendarsFormatted || "Not available"}\nCurrent Date/Time (in User's TZ): ${timezoneInfo.userLocalTime} (Offset: ${timezoneInfo.offset})\nPre-calculated Timezone ISO Strings (Today, Tomorrow, etc.): ${JSON.stringify(timezoneInfo.isoStrings)}\n\n${formattedHistory}\n\n## Current User Message\n"${currentUserMessage}"\n\n## IMPORTANT ANALYSIS INSTRUCTIONS\nFollow ALL instructions from the main prompt above (regarding CRITICAL follow-up handling, CRITICAL conversational context analysis, complexity assessment, workflow decomposition, and output format). Ensure your output is a single, valid JSON object.`;
-
-    if (!baseWorkflowPrompt || baseWorkflowPrompt.length < 100) {
-      systemPromptContent = `You are a top-level AI orchestrator for a calendar assistant.\n      User's Timezone: ${userTimezone}\n      Current Time: ${timezoneInfo.userLocalTime}\n      ${formattedHistory}\n      User Message: "${currentUserMessage}"\n      Respond with valid JSON for a simple action or workflow. Pay close attention to the history for follow-ups and contextual references.`;
-    }
-  }
-
-  console.log("[CentralOrchestratorLLM] Processing mode:", isClarificationRequest ? "System-initiated Clarification" : "Standard Analysis with History");
-
-  // Complexity analysis for standard mode (i.e., not system-initiated clarification)
-  let complexityScore = 0;
-  let complexityIndicators: string[] = [];
-  
-  if (!isClarificationRequest) {
-    console.log("[CentralOrchestratorLLM] Analyzing query complexity for:", currentUserMessage);
-    
-    const multiStepPatterns = [
-      /\b(and then|after that|then|next|also|additionally|plus)\b/gi,
-      /\b(first.*then|step.*step|1\..*2\.)\b/gi
-    ];
-    const conditionalPatterns = [
-      /\b(if|unless|but don't|except|only if|provided that|when|while|as long as)\b/gi,
-      /\b(avoid|don't.*if|unless.*then)\b/gi
-    ];
-    const batchPatterns = [
-      /\b(all|every|each|any|multiple|batch|several)\b.*\b(events?|meetings?|appointments?)\b/gi,
-      /\b(events?|meetings?|appointments?)\b.*\b(all|every|each|multiple)\b/gi
-    ];
-    const crossCalendarPatterns = [
-      /\b(work and personal|personal and work|both calendars|sync.*calendar)\b/gi,
-      /\b(calendar.*calendar|work.*personal|personal.*work)\b/gi
-    ];
-    const preferencePatterns = [
-      /\b(usual|normal|typical|avoid|don't.*during|my.*time|preferred)\b/gi,
-      /\b(gym|lunch|writing|focus|block|routine)\b/gi
-    ];
-    const timeRelationPatterns = [
-      /\b(after work|before lunch|during|around|between.*and)\b/gi,
-      /\b(morning|afternoon|evening|when.*free|available)\b/gi
-    ];
-    
-    if (multiStepPatterns.some(pattern => pattern.test(currentUserMessage))) { complexityScore += 2; complexityIndicators.push("Multiple steps"); }
-    if (conditionalPatterns.some(pattern => pattern.test(currentUserMessage))) { complexityScore += 2; complexityIndicators.push("Conditional logic"); }
-    if (batchPatterns.some(pattern => pattern.test(currentUserMessage))) { complexityScore += 1; complexityIndicators.push("Batch operations"); }
-    if (crossCalendarPatterns.some(pattern => pattern.test(currentUserMessage))) { complexityScore += 1; complexityIndicators.push("Cross-calendar"); }
-    if (preferencePatterns.some(pattern => pattern.test(currentUserMessage))) { complexityScore += 1; complexityIndicators.push("User preferences"); }
-    if (timeRelationPatterns.some(pattern => pattern.test(currentUserMessage))) { complexityScore += 1; complexityIndicators.push("Time relations"); }
-    
-    console.log(`[CentralOrchestratorLLM] Complexity - Score: ${complexityScore}, Indicators: [${complexityIndicators.join(', ')}]`);
-    
-    if (complexityScore >= 2) {
-      systemPromptContent += `\n\n## COMPLEXITY ANALYSIS RESULT\nThis query scored ${complexityScore} (Indicators: ${complexityIndicators.join(', ')}). Consider using 'execute_workflow'.`;
-    } else {
-      systemPromptContent += `\n\n## COMPLEXITY ANALYSIS RESULT\nThis query scored ${complexityScore}. Likely a simple action.`;
-    }
-  }
+  console.log("[CentralOrchestratorLLM] Invoking ICA-LLM for Intent & Context Analysis");
+  let icaRawOutput: string;
+  let icaParsedOutput: ICAOutput;
 
   try {
-    console.log("[CentralOrchestratorLLM] Invoking LLM for decision making");
-    
-    const messages = [
-      new SystemMessage(systemPromptContent),
-      new HumanMessage(currentUserMessage),
-    ];
-
-    
-
-    const result = await orchestratorLLM.invoke(messages);
-    let llmOutputText = "";
-    
-    if (typeof result.content === "string") {
-      llmOutputText = result.content;
-    } else if (Array.isArray(result.content)) {
-      llmOutputText = result.content
-        .filter((part) => part.type === "text")
-        .map((part) => (part as any).text)
-        .join("");
-    }
-
-    console.log("[CentralOrchestratorLLM] Raw LLM output length:", llmOutputText.length);
-
-    const cleanedOutput = llmOutputText
-      .trim()
-      .replace(/^```json\s*/, "")
-      .replace(/\s*```$/, "")
-      .replace(/^```\s*/, "")
-      .replace(/\s*```$/, "");
-
-    console.log("[CentralOrchestratorLLM] Attempting to parse LLM decision JSON");
-    
-    let parsedDecision;
-    try {
-      parsedDecision = JSON.parse(cleanedOutput);
-      console.log("[CentralOrchestratorLLM] Successfully parsed JSON decision");
-    } catch (parseError) {
-      console.error("[CentralOrchestratorLLM] JSON parse error:", parseError);
-      throw new Error(`Failed to parse LLM output as JSON: ${parseError}`);
-    }
-
-    const validatedDecision = llmDecisionSchema.parse(parsedDecision);
-    console.log("[CentralOrchestratorLLM] Decision validated against schema");
-
-    const decision: OrchestratorDecision = {
-      actionType: validatedDecision.actionType,
-      params: validatedDecision.params || {},
-      workflowDefinition: validatedDecision.workflowDefinition ? {
-        name: validatedDecision.workflowDefinition.name!,
-        description: validatedDecision.workflowDefinition.description,
-        tasks: validatedDecision.workflowDefinition.tasks!.map(task => ({
-          id: task.id!,
-          taskType: task.taskType!,
-          params: task.params,
-          dependsOn: task.dependsOn,
-          humanSummary: task.humanSummary,
-          outputVariable: task.outputVariable,
-          status: task.status,
-          result: task.result,
-          retries: task.retries,
-        }))
-      } : undefined,
-      responseText: validatedDecision.responseText,
-      reasoning: validatedDecision.reasoning,
-      // clarificationContextToSave is now deprecated. It will be set to null or ignored.
-      clarificationContextToSave: null, 
-      timezoneInfo: timezoneInfo,
-    };
-
-    if (decision.actionType === "call_planner" && !decision.params?.userInput) {
-      decision.params = decision.params || {};
-      decision.params.userInput = currentUserMessage;
-    }
-
-    console.log("[CentralOrchestratorLLM] Decision type:", 
-      decision.workflowDefinition ? "Workflow" : decision.actionType);
-    
-    if (decision.workflowDefinition) {
-      console.log("[CentralOrchestratorLLM] Workflow details:", {
-        name: decision.workflowDefinition.name,
-        taskCount: decision.workflowDefinition.tasks.length,
-        taskTypes: decision.workflowDefinition.tasks.map(t => t.taskType)
-      });
-    }
-
-    return decision;
-
+    icaRawOutput = await invokeLLM(icaLLM, icaSystemPrompt, icaPromptInputForSystem);
+    console.log("[CentralOrchestratorLLM] ICA-LLM Raw Output Length:", icaRawOutput.length);
+    icaParsedOutput = icaOutputSchema.parse(JSON.parse(icaRawOutput));
+    console.log("[CentralOrchestratorLLM] ICA-LLM Output Parsed & Validated Successfully");
   } catch (error) {
-    console.error("[CentralOrchestratorLLM] Error in getNextAction:", error);
-    
-    const fallbackDecision: OrchestratorDecision = {
+    console.error("[CentralOrchestratorLLM] Error during ICA-LLM call or parsing:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown ICA error";
+    return {
       actionType: "respond_directly",
-      responseText: "I apologize, but I encountered an issue processing your request. Could you please try rephrasing it?",
-      reasoning: `Error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      responseText: `I had a problem understanding the context of your message (ICA Error: ${errorMessage.substring(0,100)}). Could you please try rephrasing?`,
+      reasoning: `ICA-LLM processing failed: ${errorMessage}`,
+      clarificationContextToSave: null,
       timezoneInfo: timezoneInfo,
-      clarificationContextToSave: null, // Ensure fallback also doesn't try to save old context type
     };
-    
-    console.log("[CentralOrchestratorLLM] Returning fallback decision due to error");
-    return fallbackDecision;
   }
+
+  // --- AWD-LLM Call --- 
+  let awdSystemPrompt: string;
+  try {
+    awdSystemPrompt = fs.readFileSync(AWD_PROMPT_PATH, 'utf8');
+  } catch (error) {
+    console.error("[CentralOrchestratorLLM] FATAL: Could not read AWD prompt from ", AWD_PROMPT_PATH, error);
+    awdSystemPrompt = "You are an action decomposer. Decide action based on pre-analyzed input. Output JSON.";
+  }
+
+  // Prepare AWD-LLM input, which is the output of ICA-LLM plus AWD's own prompt instructions
+  const awdPromptInputForSystem = `## Pre-analysis from Intent & Context Analyzer (ICA-LLM):
+${JSON.stringify(icaParsedOutput, null, 2)}
+
+Based on this analysis and your main system prompt instructions, determine the final action or workflow.`;
+  
+  console.log("[CentralOrchestratorLLM] Invoking AWD-LLM for Action & Workflow Decomposition");
+  let awdRawOutput: string;
+  let awdParsedOutput: Partial<OrchestratorDecision>; // Using partial as some fields are filled later
+
+  try {
+    awdRawOutput = await invokeLLM(awdLLM, awdSystemPrompt, awdPromptInputForSystem);
+    console.log("[CentralOrchestratorLLM] AWD-LLM Raw Output Length:", awdRawOutput.length);
+    const tempAwdParsed = JSON.parse(awdRawOutput);
+    awdParsedOutput = awdOutputSchema.parse(tempAwdParsed) as Partial<OrchestratorDecision>;
+    console.log("[CentralOrchestratorLLM] AWD-LLM Output Parsed & Validated Successfully");
+  } catch (error) {
+    console.error("[CentralOrchestratorLLM] Error during AWD-LLM call or parsing:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown AWD error";
+    return {
+      actionType: "respond_directly",
+      responseText: `I had a problem deciding on the next step (AWD Error: ${errorMessage.substring(0,100)}). Could you try again?`,
+      reasoning: `AWD-LLM processing failed: ${errorMessage}`,
+      clarificationContextToSave: null,
+      timezoneInfo: timezoneInfo, // Pass along timezoneInfo
+    };
+  }
+
+  // Construct the final OrchestratorDecision
+  const finalDecision: OrchestratorDecision = {
+    actionType: awdParsedOutput.actionType,
+    params: awdParsedOutput.params || (awdParsedOutput.actionType === 'call_planner' && icaParsedOutput.reconstructedUserInputForPlanner ? { userInput: icaParsedOutput.reconstructedUserInputForPlanner } : {}),
+    workflowDefinition: awdParsedOutput.workflowDefinition,
+    responseText: awdParsedOutput.responseText,
+    reasoning: awdParsedOutput.reasoning || `ICA: ${icaParsedOutput.userIntentSummary}`, // Combine reasonings
+    clarificationContextToSave: null, // Always null as per new design
+    timezoneInfo: timezoneInfo, // Carry over the timezone info
+  };
+
+  // If AWD decides to call planner, but ICA already reconstructed the input, ensure it's used.
+  if (finalDecision.actionType === "call_planner" && 
+      icaParsedOutput.reconstructedUserInputForPlanner && 
+      (!finalDecision.params?.userInput || finalDecision.params.userInput !== icaParsedOutput.reconstructedUserInputForPlanner)) {
+    finalDecision.params = { 
+      ...(finalDecision.params || {}), 
+      userInput: icaParsedOutput.reconstructedUserInputForPlanner 
+    };
+    console.log("[CentralOrchestratorLLM] Ensured reconstructedUserInputForPlanner is used for call_planner action.");
+  }
+  // If AWD doesn't specify userInput for call_planner, and ICA didn't reconstruct, use original.
+  else if (finalDecision.actionType === "call_planner" && !finalDecision.params?.userInput) {
+     finalDecision.params = { 
+      ...(finalDecision.params || {}), 
+      userInput: currentUserMessage 
+    };
+    console.log("[CentralOrchestratorLLM] Used original currentUserMessage for call_planner action as no reconstruction was available.");
+  }
+
+  console.log("[CentralOrchestratorLLM] Final Orchestrator Decision type:", 
+    finalDecision.workflowDefinition ? "Workflow" : finalDecision.actionType);
+  if (finalDecision.workflowDefinition) {
+    console.log("[CentralOrchestratorLLM] Workflow details:", {
+      name: finalDecision.workflowDefinition.name,
+      taskCount: finalDecision.workflowDefinition.tasks.length,
+      taskTypes: finalDecision.workflowDefinition.tasks.map(t => t.taskType)
+    });
+  }
+
+  return finalDecision;
 }

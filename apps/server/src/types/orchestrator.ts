@@ -89,67 +89,63 @@ export type TaskType =
   | 'BranchOnCondition'
   | 'LoopOverItems';
 
-export interface OrchestratorDecision {
-  // For simple, single-action decisions (backward compatibility)
-  actionType?: OrchestratorActionType;
-  params?: {
-    userInput?: string;
-    originalRequestNature?: "singular" | "plural_or_unspecified"; // Hint for planner
-    // For 'perform_google_calendar_action'
-    GCToolName?: 'delete_event_direct' | string; // e.g. 'delete_event_direct'
-    GCToolArgs?: any; // Arguments for the direct GC call
-    // For 'ask_user_clarification_for_tool_ambiguity'
-    ambiguousCandidates?: DeletionCandidate[]; // Candidates that caused ambiguity
-    originalUserQueryForClarification?: string; // The user query that led to ambiguity
-    // For 'fetch_context_and_call_planner'
-    contextQuery?: string; // Query to find referenced events (e.g., "class on Thursday")
-    contextTimeMin?: string; // Time range for finding referenced events
-    contextTimeMax?: string; // Time range for finding referenced events
-    contextCalendarIds?: string[] | null; // Specific calendars to search (optional)
-    timeMin?: string | null; // For other actions
-    timeMax?: string | null; // For other actions
-    anchorEventsContext?: Array<{
-      summary: string;
-      start: string;
-      end: string;
-      calendarId: string;
-    }> | null; // Existing anchor events context
-    [key: string]: any;
-  } | any; 
-  
-  // For complex, multi-step decisions (new workflow capability)
-  workflowDefinition?: WorkflowDefinition;
-  
-  // Common fields for both simple and complex decisions
-  responseText?: string | null; 
-  /**
-   * @deprecated This field is deprecated and will be removed in a future version. 
-   * The system now relies on conversational history analysis for follow-ups.
-   * This will always be null in responses from centralOrchestratorLLM.
-   */
-  clarificationContextToSave?: any | null; 
-  reasoning?: string; 
-  // Centralized timezone information
-  timezoneInfo?: {
-    timezone: string;
-    offset: string;
-    userLocalTime: string;
-    currentTimeInUserTZ: string;
-    dates: {
-      today: string;
-      tomorrow: string;
-      yesterday: string;
-    };
-    isoStrings: {
-      todayStart: string;
-      todayEnd: string;
-      tomorrowStart: string;
-      tomorrowEnd: string;
-      yesterdayStart: string;
-      yesterdayEnd: string;
-      currentTime: string;
-    };
+export interface TimezoneInfo {
+  timezone: string;
+  offset: string;
+  userLocalTime: string;
+  currentTimeInUserTZ: string;
+  dates: {
+    today: string;
+    tomorrow: string;
+    yesterday: string;
   };
+  isoStrings: {
+    todayStart: string;
+    todayEnd: string;
+    tomorrowStart: string;
+    tomorrowEnd: string;
+    yesterdayStart: string;
+    yesterdayEnd: string;
+    currentTime: string;
+  };
+}
+
+export interface ICAAnalysis {
+  isFollowUp: boolean;
+  followUpType: string; 
+  certainty: string;
+}
+
+export interface OriginalRequestContext {
+  assistantLastRelevantTurnNumber?: number | null;
+  assistantLastResponseSummary?: string | null;
+  originalUserQueryText?: string | null;
+  relatedActionTypeFromHistory?: string | null;
+}
+
+// Added ICAOutput interface
+export interface ICAOutput {
+  analysis: ICAAnalysis;
+  currentUserMessage: string;
+  reconstructedUserInputForPlanner: string | null;
+  originalRequestContext: OriginalRequestContext | null;
+  entitiesInCurrentMessage: string[];
+  userIntentSummary: string;
+  requiresImmediatePlannerCall: boolean;
+  historyForAWD: string | null;
+  userTimezone: string;
+  userCalendarsFormatted: string;
+  timezoneInfo: TimezoneInfo; // Replaced any with specific type
+}
+
+export interface OrchestratorDecision {
+  actionType?: OrchestratorActionType;
+  params?: any; 
+  workflowDefinition?: WorkflowDefinition | null;
+  responseText?: string | null;
+  reasoning?: string;
+  clarificationContextToSave?: any | null; // Should always be null based on new prompt design
+  timezoneInfo: TimezoneInfo;
 }
 
 // It can also be useful to have a more specific type for the history passed to the orchestrator's prompt, separate from the DB model

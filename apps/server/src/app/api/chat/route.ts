@@ -910,6 +910,247 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ message: finalAssistantResponseMessage, conversationId: conversationId });
 
+  } else if (orchestratorDecision.actionType === 'execute_workflow') {
+    console.log("[ChatRoute] Orchestrator requested workflow execution, but workflows are not yet implemented. Falling back to planner.");
+    console.log("[ChatRoute] Workflow definition:", orchestratorDecision.workflowDefinition);
+    
+    // For now, fall back to calling the planner with the original user input
+    // This prevents the system from breaking while we discourage workflow usage for simple requests
+    let plan: CalendarAction | null;
+    try {
+      plan = await generatePlan(
+        textInput, 
+        currentTimeISO, 
+        userTimezone, 
+        userCalendarsFormatted,
+        undefined, // No special params
+        orchestratorDecision.timezoneInfo
+      );
+      assistantToolCalled = `workflow_fallback_to_planner->${plan?.action || 'unknown_plan_action'}`;
+      assistantToolParams = plan?.params as Prisma.InputJsonValue | undefined;
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Unknown planner error";
+        console.error("[ChatRoute] Error in fallback planner call for workflow:", error);
+        finalAssistantResponseMessage = `I tried to handle your request but encountered an issue: ${message}. Please try rephrasing your request.`;
+        assistantMessageForDb = finalAssistantResponseMessage;
+        assistantToolResult = { error: finalAssistantResponseMessage, workflowFallback: true, details: (error instanceof ZodError) ? error.format() : undefined } as Prisma.InputJsonValue;
+        await prisma.conversationTurn.create({
+            data: {
+                conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+                actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: 'workflow_fallback_error',
+                toolParams: undefined, 
+                toolResult: assistantToolResult, requiresFollowUp: false,
+            }
+        });
+        return NextResponse.json({ error: finalAssistantResponseMessage, details: (error instanceof ZodError) ? error.format() : undefined, conversationId: conversationId }, { status: 500 });
+    }
+
+    if (!plan) {
+        finalAssistantResponseMessage = "I couldn't determine how to handle your request. Could you please rephrase it?";
+        assistantMessageForDb = finalAssistantResponseMessage;
+        assistantToolResult = { error: finalAssistantResponseMessage, workflowFallback: true };
+        await prisma.conversationTurn.create({
+            data: {
+                conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+                actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: 'workflow_fallback_no_plan',
+                toolParams: undefined, 
+                toolResult: assistantToolResult, requiresFollowUp: false,
+            }
+        });
+        return NextResponse.json({ error: finalAssistantResponseMessage, conversationId: conversationId }, { status: 400 });
+    }
+
+    // Execute the plan normally
+    try {
+      console.log(`[ChatRoute] Executing fallback plan: ${plan.action}, params:`, plan.params);
+      const executePlanResult = await executePlan({
+        plan,
+        internalDbUserId: internalUserId,
+        clerkUserId: userId,
+        googleAccessToken,
+        explicitCalendarId: requestBody.explicitCalendarId,
+        selectedCalendarIds: requestBody.selectedCalendarIds,
+        userTimezone: requestBody.userTimezone,
+        textInput: textInput,
+        userCalendarsFormatted: userCalendarsFormatted,
+        currentTimeISO: new Date().toISOString(),
+        timezoneInfo: orchestratorDecision.timezoneInfo,
+      });
+
+      let finalResponseToUser: string;
+      let structuredToolResultForLog: any = null;
+
+      if (typeof executePlanResult === 'string') {
+        finalResponseToUser = executePlanResult;
+        assistantToolResult = { planResult: executePlanResult, workflowFallback: true } as Prisma.InputJsonValue;
+      } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_deletion') {
+        // Handle clarification cases...
+        assistantRequiresFollowUp = true;
+        assistantClarificationContext = {
+          type: 'delete_candidates_for_confirmation',
+          candidates: executePlanResult.candidates,
+          originalUserQuery: executePlanResult.originalQuery
+        } as any as Prisma.JsonObject;
+        
+        const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_candidates_for_confirmation. Details: ${JSON.stringify(executePlanResult)}`;
+        const clarificationDecision = await getNextAction(
+          orderedHistory, 
+          clarificationInput, 
+          requestBody.userTimezone,
+          userCalendarsFormatted, 
+          true 
+        );
+
+        finalResponseToUser = clarificationDecision.responseText || "I need a bit more clarity. Could you help me understand?";
+        assistantMessageForDb = finalResponseToUser;
+        if (clarificationDecision.clarificationContextToSave) {
+          assistantClarificationContext = clarificationDecision.clarificationContextToSave as any as Prisma.JsonObject;
+        }
+        assistantLlmPrompt = `System prompt for clarification + ${JSON.stringify(executePlanResult)}`; 
+        assistantToolResult = { clarificationDecision: clarificationDecision, workflowFallback: true } as unknown as Prisma.InputJsonValue;
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'clarification_needed_for_time_range') {
+        // Handle time range clarification...
+        assistantRequiresFollowUp = true;
+        assistantClarificationContext = {
+          type: 'delete_clarify_time_range_pending',
+          originalUserQuery: executePlanResult.originalQuery,
+          attemptedTimeMin: executePlanResult.attemptedTimeMin,
+          attemptedTimeMax: executePlanResult.attemptedTimeMax
+        } as any as Prisma.JsonObject;
+
+        const clarificationInput = `SYSTEM_CLARIFICATION_REQUEST: Type: delete_clarify_time_range. Details: ${JSON.stringify(executePlanResult)}. Task: Ask user to confirm or provide a new time range for their deletion request.`;
+        const clarificationDecision = await getNextAction(
+          orderedHistory,
+          clarificationInput,
+          requestBody.userTimezone,
+          userCalendarsFormatted,
+          true
+        );
+
+        finalResponseToUser = clarificationDecision.responseText || "I couldn't find any events in that time frame. Would you like to try a different date or time range?";
+        assistantMessageForDb = finalResponseToUser;
+        if (clarificationDecision.clarificationContextToSave) {
+          assistantClarificationContext = clarificationDecision.clarificationContextToSave as any as Prisma.JsonObject;
+        }
+        assistantLlmPrompt = `System prompt for time range clarification + ${JSON.stringify(executePlanResult)}`;
+        assistantToolResult = { clarificationDecision: clarificationDecision, workflowFallback: true } as unknown as Prisma.InputJsonValue;
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'conflict_detected_for_creation') {
+        // Handle conflict detection...
+        assistantRequiresFollowUp = true;
+        assistantClarificationContext = {
+          type: 'conflict_resolution_pending',
+          originalEventDetails: executePlanResult.proposedEvents[0],
+          conflictingEvents: executePlanResult.conflictingEvents,
+          suggestions: executePlanResult.suggestions,
+          originalMessage: executePlanResult.message
+        } as any as Prisma.JsonObject;
+
+        let conflictMessage = executePlanResult.message + "\n\n";
+        if (executePlanResult.suggestions && executePlanResult.suggestions.length > 0) {
+          conflictMessage += "Here are your options:\n";
+          executePlanResult.suggestions.forEach((suggestion, index) => {
+            conflictMessage += `${index + 1}. ${suggestion}\n`;
+          });
+          conflictMessage += "\nWhat would you like me to do?";
+        }
+
+        finalResponseToUser = conflictMessage;
+        assistantMessageForDb = finalResponseToUser;
+        assistantLlmPrompt = `System prompt for conflict resolution + ${JSON.stringify(executePlanResult)}`;
+        assistantToolResult = { conflictDetection: executePlanResult, workflowFallback: true } as unknown as Prisma.InputJsonValue;
+
+      } else if ('type' in executePlanResult && executePlanResult.type === 'partial_creation_with_conflicts') {
+        // Handle partial creation with conflicts...
+        const partialResult = executePlanResult as PartialCreationWithConflicts;
+        assistantRequiresFollowUp = true;
+        
+        assistantClarificationContext = {
+          type: 'partial_conflict_resolution_pending',
+          createdEvents: partialResult.createdEvents,
+          conflictingEvents: partialResult.conflictingEvents,
+          originalCreationMessages: partialResult.creationMessages
+        } as any as Prisma.JsonObject;
+
+        let responseMessage = partialResult.message + "\n\n";
+        
+        if (partialResult.creationMessages.length > 0) {
+          responseMessage += "✅ **Successfully created:**\n";
+          partialResult.creationMessages.forEach(msg => {
+            responseMessage += `• ${msg}\n`;
+          });
+          responseMessage += "\n";
+        }
+
+        if (partialResult.conflictingEvents.length > 0) {
+          responseMessage += "⚠️ **Events needing your input:**\n";
+          partialResult.conflictingEvents.forEach((conflict, index) => {
+            responseMessage += `\n**${conflict.proposedEvent.summary || 'Event'}** conflicts with existing events.\n`;
+            responseMessage += "Your options:\n";
+            conflict.suggestions.forEach((suggestion, suggestionIndex) => {
+              responseMessage += `${suggestionIndex + 1}. ${suggestion}\n`;
+            });
+          });
+          responseMessage += "\nPlease let me know how you'd like to resolve these conflicts.";
+        }
+
+        finalResponseToUser = responseMessage;
+        assistantMessageForDb = finalResponseToUser;
+        assistantLlmPrompt = `System prompt for partial creation with conflicts + ${JSON.stringify(partialResult)}`;
+        assistantToolResult = { partialCreationWithConflicts: partialResult, workflowFallback: true } as unknown as Prisma.InputJsonValue;
+
+      } else {
+        // Handle successful creation
+        const createResult = executePlanResult as CreateEventExecutionResult; 
+        finalResponseToUser = createResult.userMessage;
+        structuredToolResultForLog = createResult.createdEventsDetails;
+        assistantToolResult = { createdEventsDetails: structuredToolResultForLog, workflowFallback: true } as Prisma.InputJsonValue; 
+      }
+      
+      assistantMessageForDb = finalResponseToUser;
+
+      await prisma.conversationTurn.create({
+        data: {
+          conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+          actor: 'ASSISTANT', messageText: assistantMessageForDb, toolCalled: assistantToolCalled,
+          toolParams: assistantToolParams, toolResult: assistantToolResult, requiresFollowUp: assistantRequiresFollowUp,
+          clarificationContext: assistantClarificationContext, llmPrompt: assistantLlmPrompt
+        }
+      });
+      return NextResponse.json({ message: finalResponseToUser, conversationId: conversationId });
+
+    } catch (error: unknown) {
+        let errorForDbLogging: string | Prisma.InputJsonValue = "Unknown tool execution error";
+        assistantMessageForDb = "Error performing planned action via workflow fallback."; 
+
+        if (error instanceof ZodError) {
+            console.error("[ChatRoute] Parameter validation error for workflow fallback:", error.format());
+            errorForDbLogging = { error: "Parameter validation failed for the calendar action.", details: error.format() } as Prisma.InputJsonValue;
+            assistantMessageForDb = `Error: Parameter validation failed. Details: ${JSON.stringify(error.format())}`;
+        } else {
+            const message = error instanceof Error ? error.message : "Unknown tool execution error";
+            errorForDbLogging = message; 
+            assistantMessageForDb = `Error: Error performing planned action via workflow fallback: ${message}`;
+            console.error(`[ChatRoute] Error executing plan via workflow fallback for action '${plan.action}':`, error);
+        }
+        assistantToolResult = { error: errorForDbLogging, workflowFallback: true } as Prisma.InputJsonValue;
+        finalAssistantResponseMessage = assistantMessageForDb; 
+
+        await prisma.conversationTurn.create({
+            data: {
+                conversationId: conversationId, userId: internalUserId, turnNumber: assistantTurnNumber,
+                actor: 'ASSISTANT', messageText: assistantMessageForDb,
+                toolCalled: assistantToolCalled ? `${assistantToolCalled}_error` : 'workflow_fallback_execute_error',
+                toolParams: assistantToolParams, 
+                toolResult: assistantToolResult, requiresFollowUp: false,
+            }
+        });
+        const responseErrorBody: {error: string, details?: any, conversationId: string} = { error: finalAssistantResponseMessage, conversationId: conversationId };
+        if (error instanceof ZodError) responseErrorBody.details = error.format();
+        return NextResponse.json(responseErrorBody, { status: (error instanceof ZodError) ? 400 : 500 });
+    }
+
   } else {
     console.error("[ChatRoute] Unknown orchestrator action type:", orchestratorDecision.actionType);
     finalAssistantResponseMessage = "Sorry, I encountered an unexpected internal state.";
