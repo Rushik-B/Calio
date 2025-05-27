@@ -31,14 +31,14 @@ import { promises as fsPromises } from 'fs';
  */
 const calendarActionSchema = z.object({
   actionType: z.enum(["create_event", "list_events", "update_event", "delete_event", "general_chat"]).describe("The type of calendar action to perform. This is a mandatory field."),
-  calendarId: z.string().optional().describe("The ID of the calendar to use. Defaults to 'primary'. Users might specify this e.g., 'work calendar', 'personal calendar'. You should try to map this to a known ID if possible based on context, otherwise pass it as received if it looks like an ID."),
+  calendarId: z.string().optional().nullable().describe("The ID of the calendar to use. Defaults to 'primary'. Users might specify this e.g., 'work calendar', 'personal calendar'. You should try to map this to a known ID if possible based on context, otherwise pass it as received if it looks like an ID."),
   eventId: z.string().optional().describe("The ID of the event to update or delete."),
   summary: z.string().optional().describe("The summary or title of the event."),
   description: z.string().optional().describe("The detailed description of the event."),
   location: z.string().optional().describe("The location of the event."),
   start: z.string().optional().describe("The start time of the event in ISO 8601 format. If the user specifies a date but no time for a new event, assume it's an all-day event starting on that date. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the beginning of that day in that timezone (e.g., YYYY-MM-DDT00:00:00+offset or YYYY-MM-DDT00:00:00 if the timezone is UTC)."),
   end: z.string().optional().describe("The end time of the event in ISO 8601 format. If the user specifies a date but no time for a new event, this should be the start of the following day for an all-day event. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the end of that day in that timezone (e.g., YYYY-MM-DDT23:59:59.999+offset or YYYY-MM-DDT23:59:59.999 if the timezone is UTC)."),
-  query: z.string().optional().describe("The search query for listing events."),
+  query: z.string().optional().describe("The search query for listing events. Use ONLY for list_events action. Do NOT use for update_event or delete_event actions."),
   timeMin: z.string().optional().describe("The minimum time for listing events in ISO 8601 format. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the beginning of that day in that timezone (e.g., YYYY-MM-DDT00:00:00+offset or YYYY-MM-DDT00:00:00 if the timezone is UTC)."),
   timeMax: z.string().optional().describe("The maximum time for listing events in ISO 8601 format. For queries spanning a whole day (e.g. 'on Thursday') in the user's timezone (provided as {userTimezone}), this should be the end of that day in that timezone (e.g., YYYY-MM-DDT23:59:59.999+offset or YYYY-MM-DDT23:59:59.999 if the timezone is UTC)."),
   attendees: z.array(z.string()).optional().describe("A list of email addresses of attendees for the event."),
@@ -97,8 +97,18 @@ export interface DeleteEventIntentParams {
   originalRequestNature?: "singular" | "plural_or_unspecified"; // Hint from orchestrator
 }
 
+export interface UpdateEventIntentParams {
+  userInput: string;
+  userTimezone: string;
+  calendarId?: string; // Calendar ID if planner can determine it
+  timeMin?: string;    // Optional: From planner for scoping event search
+  timeMax?: string;    // Optional: From planner for scoping event search
+  anchorEventsContext?: AnchorEventContext[]; // Context events found by orchestrator
+}
+
 // Define a type for the anchor event context, matching eventCreatorLLM.ts
 interface AnchorEventContext {
+  id?: string | null; // Event ID for updates/deletes
   summary?: string | null;
   start?: { date?: string; dateTime?: string; timeZone?: string } | null;
   end?: { date?: string; dateTime?: string; timeZone?: string } | null;
@@ -107,7 +117,7 @@ interface AnchorEventContext {
 
 export type CalendarAction = {
     action: "create_event" | "list_events" | "update_event" | "delete_event" | "general_chat";
-    params?: CalendarActionParams | CreateEventIntentParams | DeleteEventIntentParams | { userInput: string; userTimezone: string; calendarId?: string; anchorEventsContext?: AnchorEventContext[] }; // Updated for create_event with anchor context
+    params?: CalendarActionParams | CreateEventIntentParams | DeleteEventIntentParams | UpdateEventIntentParams | { userInput: string; userTimezone: string; calendarId?: string; anchorEventsContext?: AnchorEventContext[] }; // Updated for create_event with anchor context
     speakableToolResponse?: string;
 };
 
@@ -122,11 +132,35 @@ export async function generatePlan(
     timeMax?: string; // Added for type safety from orchestrator
     anchorEventsContext?: AnchorEventContext[]; // Added to receive orchestrator hints
     [key: string]: any 
+  },
+  timezoneInfo?: { // NEW: Centralized timezone information from orchestrator
+    timezone: string;
+    offset: string;
+    userLocalTime: string;
+    currentTimeInUserTZ: string;
+    dates: {
+      today: string;
+      tomorrow: string;
+      yesterday: string;
+    };
+    isoStrings: {
+      todayStart: string;
+      todayEnd: string;
+      tomorrowStart: string;
+      tomorrowEnd: string;
+      yesterdayStart: string;
+      yesterdayEnd: string;
+      currentTime: string;
+    };
   }
 ): Promise<CalendarAction | null> {
   let calendarSystemPrompt = await fsPromises.readFile(calendarSystemPromptPath, 'utf-8');
   
-  calendarSystemPrompt = calendarSystemPrompt.replace("{currentTimeISO}", currentTimeISO);
+  // Use centralized timezone information instead of doing calculations here
+  const effectiveCurrentTime = timezoneInfo?.currentTimeInUserTZ || currentTimeISO;
+  const effectiveUserTime = timezoneInfo?.userLocalTime || 'Not calculated';
+  
+  calendarSystemPrompt = calendarSystemPrompt.replace("{currentTimeISO}", effectiveCurrentTime);
   calendarSystemPrompt = calendarSystemPrompt.replace("{userTimezone}", userTimezone);
   
   if (userCalendarsFormatted) {
@@ -139,6 +173,7 @@ export async function generatePlan(
   if (orchestratorParams?.anchorEventsContext && orchestratorParams.anchorEventsContext.length > 0) {
     const anchorContextString = orchestratorParams.anchorEventsContext.map(event => {
       let eventParts = [];
+      if (event.id) eventParts.push(`ID: '${event.id}'`);
       if (event.summary) eventParts.push(`Summary: '${event.summary}'`);
       if (event.start?.dateTime) eventParts.push(`Start: '${event.start.dateTime}'`);
       else if (event.start?.date) eventParts.push(`Start Date: '${event.start.date}'`);
@@ -177,7 +212,7 @@ export async function generatePlan(
     new HumanMessage(userInputForPlannerLLM),
   ];
 
-  console.log(`[Planner] Generating plan for input: "${userInputForPlannerLLM}", currentTime: ${currentTimeISO}, userTimezone: ${userTimezone}`);
+  console.log(`[Planner] Generating plan for input: "${userInputForPlannerLLM}", currentTime: ${effectiveCurrentTime}, userTimezone: ${userTimezone}`);
 
   try {
     const result = await llmWithTools.invoke(messages);
@@ -237,9 +272,15 @@ export async function generatePlan(
             
             console.log(`[Planner] LLM determined action: ${determinedAction}`);
 
+            // Clean null values by converting them to undefined (LLMs sometimes output null instead of omitting fields)
+            const cleanedParams: Omit<typeof validatedParams, 'calendarId'> & { calendarId?: string } = {
+                ...validatedParams,
+                calendarId: validatedParams.calendarId || undefined
+            };
+
             // If orchestrator provided timeMin/timeMax, use them directly, overriding LLM's extraction for these fields.
             // This is crucial for "delete events just created" scenarios where orchestrator calculates the scope.
-            let finalParamsForAction = { ...validatedParams };
+            let finalParamsForAction = { ...cleanedParams };
             if (orchestratorParams?.timeMin && orchestratorParams?.timeMax && determinedAction === "delete_event") {
                 console.log(`[Planner] Overriding timeMin/timeMax with values from orchestrator: ${orchestratorParams.timeMin}, ${orchestratorParams.timeMax}`);
                 finalParamsForAction.timeMin = orchestratorParams.timeMin as string;
@@ -271,6 +312,19 @@ export async function generatePlan(
                         timeMax: finalParamsForAction.timeMax, // Could be from orchestrator or LLM
                         query: finalParamsForAction.query,
                         originalRequestNature: orchestratorParams?.originalRequestNature // Pass the hint
+                    }
+                };
+            } else if (determinedAction === "update_event") {
+                console.log(`[Planner] Action type 'update_event' identified. Passing to specialized Event Updater LLM logic.`);
+                return {
+                    action: "update_event",
+                    params: { // UpdateEventIntentParams for the downstream service
+                        userInput: userInput, // IMPORTANT: Use the original userInput for the event updater
+                        userTimezone: userTimezone,
+                        calendarId: finalParamsForAction.calendarId,
+                        timeMin: finalParamsForAction.timeMin, // For scoping event search
+                        timeMax: finalParamsForAction.timeMax, // For scoping event search
+                        anchorEventsContext: orchestratorParams?.anchorEventsContext // Pass through anchor context
                     }
                 };
             } else if (determinedAction === "general_chat") {

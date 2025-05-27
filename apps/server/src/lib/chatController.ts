@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 import type { calendar_v3 } from "googleapis";
-import { CalendarAction, CreateEventIntentParams, DeleteEventIntentParams } from "@/lib/planner";
+import { CalendarAction, CreateEventIntentParams, DeleteEventIntentParams, UpdateEventIntentParams } from "@/lib/planner";
 import {
   CreateEventTool,
   ListEventsTool,
@@ -14,6 +14,8 @@ import { handleGeneralChat } from "@/lib/generalChatHandler";
 import { handleEventAnalysis } from "@/lib/eventAnalyzer";
 import { generateEventCreationJSONs, eventCreationRequestListSchema } from "@/lib/eventCreatorLLM";
 import { generateEventDeletionJSONs, eventDeletionRequestListSchema } from "@/lib/eventDeleterLLM";
+import { generateEventUpdateJSONs, eventUpdateRequestListSchema } from "@/lib/eventUpdaterLLM";
+import { generateSmartSuggestions } from "@/lib/timeSlotFinder";
 
 interface EventWithCalendarId extends calendar_v3.Schema$Event {
   calendarId: string;
@@ -30,6 +32,26 @@ interface ChatControllerParams {
   textInput: string;
   userCalendarsFormatted: string;
   currentTimeISO: string;
+  timezoneInfo?: {
+    timezone: string;
+    offset: string;
+    userLocalTime: string;
+    currentTimeInUserTZ: string;
+    dates: {
+      today: string;
+      tomorrow: string;
+      yesterday: string;
+    };
+    isoStrings: {
+      todayStart: string;
+      todayEnd: string;
+      tomorrowStart: string;
+      tomorrowEnd: string;
+      yesterdayStart: string;
+      yesterdayEnd: string;
+      currentTime: string;
+    };
+  };
 }
 
 // Define a more specific type for the events we expect to process (from eventDeleterLLM)
@@ -78,12 +100,122 @@ export interface ClarificationNeededForTimeRange {
   attemptedTimeMax?: string; 
 }
 
+export interface ConflictDetectedForCreation {
+  type: 'conflict_detected_for_creation';
+  message: string;
+  proposedEvents: any[];
+  conflictingEvents: any[];
+  suggestions: string[];
+}
+
+export interface PartialCreationWithConflicts {
+  type: 'partial_creation_with_conflicts';
+  message: string;
+  createdEvents: CreatedEventDetails[];
+  conflictingEvents: Array<{
+    proposedEvent: any;
+    conflictsWith: any[];
+    suggestions: string[];
+  }>;
+  creationMessages: string[];
+}
+
 export interface CreateEventExecutionResult {
   userMessage: string;
   createdEventsDetails: CreatedEventDetails[]; 
 }
 
-export type ExecutePlanResult = string | ClarificationNeededForDeletion | CreateEventExecutionResult | ClarificationNeededForTimeRange;
+export type ExecutePlanResult = string | ClarificationNeededForDeletion | CreateEventExecutionResult | ClarificationNeededForTimeRange | ConflictDetectedForCreation | PartialCreationWithConflicts;
+
+// Conflict detection result interface
+interface ConflictCheckResult {
+  hasConflicts: boolean;
+  message: string;
+  conflictingEvents: any[];
+}
+
+// Helper function to parse date/time strings
+function parseEventDateTime(dateTime: any): Date | null {
+  if (!dateTime) return null;
+  
+  if (dateTime.dateTime) {
+    return new Date(dateTime.dateTime);
+  } else if (dateTime.date) {
+    // For all-day events, treat as starting at midnight
+    return new Date(dateTime.date + 'T00:00:00');
+  }
+  
+  return null;
+}
+
+// Code-based conflict detection function
+async function checkEventConflicts(
+  proposedEvents: any[],
+  existingEvents: calendar_v3.Schema$Event[],
+  userTimezone: string
+): Promise<ConflictCheckResult> {
+  const conflicts: any[] = [];
+  
+  for (const proposedEvent of proposedEvents) {
+    const proposedStart = parseEventDateTime(proposedEvent.start);
+    const proposedEnd = parseEventDateTime(proposedEvent.end);
+    
+    if (!proposedStart || !proposedEnd) continue;
+    
+    for (const existingEvent of existingEvents) {
+      const existingStart = parseEventDateTime(existingEvent.start);
+      const existingEnd = parseEventDateTime(existingEvent.end);
+      
+      if (!existingStart || !existingEnd) continue;
+      
+      // Mathematical overlap check: start1 < end2 && start2 < end1
+      if (proposedStart < existingEnd && existingStart < proposedEnd) {
+        conflicts.push({
+          id: existingEvent.id,
+          summary: existingEvent.summary || 'Untitled Event',
+          start: existingEvent.start?.dateTime || existingEvent.start?.date,
+          end: existingEvent.end?.dateTime || existingEvent.end?.date,
+          calendarId: (existingEvent as any).calendarId || 'unknown'
+        });
+      }
+    }
+  }
+  
+  if (conflicts.length > 0) {
+    const conflictSummaries = conflicts.map(c => c.summary).join(', ');
+    return {
+      hasConflicts: true,
+      message: `Your ${proposedEvents[0]?.summary || 'event'} conflicts with: ${conflictSummaries}`,
+      conflictingEvents: conflicts
+    };
+  }
+  
+  return {
+    hasConflicts: false,
+    message: '',
+    conflictingEvents: []
+  };
+}
+
+// Smart suggestion engine - uses the new timeSlotFinder for accurate free time suggestions
+function generateTimeSlotSuggestions(
+  proposedEvent: any,
+  existingEvents: calendar_v3.Schema$Event[],
+  userTimezone: string
+): string[] {
+  // Use the new smart suggestion engine from timeSlotFinder
+  const suggestions = generateSmartSuggestions(
+    proposedEvent,
+    [], // We'll pass the specific conflicting events if needed
+    existingEvents, // All existing events for comprehensive availability check
+    userTimezone
+  );
+  
+  // Add fallback option
+  suggestions.push("Create anyway and resolve the conflict later");
+  
+  return suggestions.slice(0, 4); // Limit to 4 suggestions
+}
 
 export async function executePlan(params: ChatControllerParams): Promise<ExecutePlanResult> {
   const { 
@@ -119,13 +251,75 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
       }
 
       console.log("[ChatController] Calling EventCreatorLLM with userInput:", createIntentParams.userInput, "and anchorContext:", createIntentParams.anchorEventsContext);
+      
+      // Fetch existing events for conflict checking (from the next few days)
+      const conflictCheckTimeMin = new Date().toISOString();
+      const conflictCheckTimeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // Next 7 days
+      
+      let existingEventsForConflictCheck: calendar_v3.Schema$Event[] = [];
+      const calendarsToCheckForConflicts = selectedCalendarIds || [explicitCalendarId || 'primary'].filter(Boolean);
+      
+      try {
+        for (const calId of calendarsToCheckForConflicts) {
+          console.log(`[ChatController] Fetching events from calendar '${calId}' for conflict checking.`);
+          const eventsFromCal = await apiListEvents(clerkUserId, googleAccessToken, calId, {
+            timeMin: conflictCheckTimeMin,
+            timeMax: conflictCheckTimeMax,
+            singleEvents: true,
+            orderBy: "startTime",
+            timeZone: userTimezone
+          });
+          if (eventsFromCal) {
+            // Add calendarId to each event for conflict checking
+            const eventsWithCalendarId = eventsFromCal.map(event => ({
+              ...event,
+              calendarId: calId
+            }));
+            existingEventsForConflictCheck.push(...eventsWithCalendarId);
+          }
+        }
+        console.log(`[ChatController] Found ${existingEventsForConflictCheck.length} existing events for conflict checking.`);
+      } catch (error) {
+        console.warn("[ChatController] Failed to fetch events for conflict checking:", error);
+        // Continue without conflict checking
+      }
+
+      // Pass existing events to EventCreatorLLM so it can handle conditional logic properly
       const eventJSONsToCreate = await generateEventCreationJSONs({
         userInput: createIntentParams.userInput,
         userTimezone: userTimezone,
         userCalendarsFormatted: userCalendarsFormatted,
         currentTimeISO: currentTimeISO,
-        anchorEventsContext: createIntentParams.anchorEventsContext
+        anchorEventsContext: createIntentParams.anchorEventsContext,
+        timezoneInfo: params.timezoneInfo,
+        existingEventsForConflictCheck: existingEventsForConflictCheck, // Pass existing events for conditional logic evaluation
       });
+
+      // CODE-BASED CONFLICT DETECTION
+      if (eventJSONsToCreate && eventJSONsToCreate.length > 0) {
+        const conflictResult = await checkEventConflicts(
+          eventJSONsToCreate,
+          existingEventsForConflictCheck,
+          userTimezone
+        );
+        
+        if (conflictResult.hasConflicts) {
+          // Generate intelligent suggestions using our smart suggestion engine
+          const suggestions = generateTimeSlotSuggestions(
+            eventJSONsToCreate[0], // Primary event
+            existingEventsForConflictCheck,
+            userTimezone
+          );
+          
+          return {
+            type: 'conflict_detected_for_creation',
+            message: conflictResult.message,
+            proposedEvents: eventJSONsToCreate,
+            conflictingEvents: conflictResult.conflictingEvents,
+            suggestions: suggestions
+          } as ConflictDetectedForCreation;
+        }
+      }
 
       if (!eventJSONsToCreate || eventJSONsToCreate.length === 0) {
         toolResult = "I couldn't determine any specific events to create from your request. Could you please rephrase or provide more details?";
@@ -263,10 +457,158 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
       }
       break;
     case "update_event":
-      const updateParams = updateEventParamsSchema.parse(plan.params);
-      updateParams.calendarId = explicitCalendarId || updateParams.calendarId;
-      const updateTool = new UpdateEventTool(clerkUserId, googleAccessToken);
-      toolResult = await updateTool.call(updateParams);
+      const updateIntentParams = plan.params as UpdateEventIntentParams;
+      if (!updateIntentParams || typeof updateIntentParams.userInput !== 'string') {
+        console.error("[ChatController] Invalid params for update_event action:", updateIntentParams);
+        throw new Error("Planner did not provide valid input for event updating.");
+      }
+
+      let targetCalendarIdsForUpdate: string[] = [];
+      if (explicitCalendarId) {
+        targetCalendarIdsForUpdate = [explicitCalendarId];
+      } else if (selectedCalendarIds && selectedCalendarIds.length > 0) {
+        targetCalendarIdsForUpdate = selectedCalendarIds;
+      } else if (updateIntentParams.calendarId) {
+        targetCalendarIdsForUpdate = [updateIntentParams.calendarId];
+      } else {
+        console.warn("[ChatController] No specific calendar ID for update, defaulting to 'primary'.");
+        targetCalendarIdsForUpdate = ['primary'];
+      }
+
+      console.log(`[ChatController] Attempting to update events. User input: "${updateIntentParams.userInput}". Target calendars: ${targetCalendarIdsForUpdate.join(', ')}`);
+
+      const eventsToConsiderForUpdate: EventWithCalendarId[] = [];
+      const updateListOptions: Omit<calendar_v3.Params$Resource$Events$List, 'calendarId' | 'timeZone'> = {
+        timeMin: updateIntentParams.timeMin, 
+        timeMax: updateIntentParams.timeMax, 
+        singleEvents: true,
+        orderBy: "startTime",
+      };
+
+      // Use anchor events context if provided by orchestrator, otherwise fetch events
+      if (updateIntentParams.anchorEventsContext && updateIntentParams.anchorEventsContext.length > 0) {
+        // Convert anchor events context to EventWithCalendarId format, now with real event IDs
+        updateIntentParams.anchorEventsContext.forEach(anchorEvent => {
+          if (anchorEvent.id && anchorEvent.summary && anchorEvent.calendarId) {
+            eventsToConsiderForUpdate.push({
+              id: anchorEvent.id, // Now has the real event ID
+              summary: anchorEvent.summary,
+              start: anchorEvent.start, // Already in proper Google Calendar format
+              end: anchorEvent.end, // Already in proper Google Calendar format
+              calendarId: anchorEvent.calendarId,
+            } as EventWithCalendarId);
+          }
+        });
+        console.log(`[ChatController] Using ${eventsToConsiderForUpdate.length} anchor events for update consideration.`);
+      } else {
+        // Fetch events from calendars
+        for (const calId of targetCalendarIdsForUpdate) {
+          console.log(`[ChatController] Fetching events from calendar '${calId}' to consider for update.`);
+          const eventsFromCal = await apiListEvents(clerkUserId, googleAccessToken, calId, { ...updateListOptions, timeZone: userTimezone });
+          if (eventsFromCal) {
+            eventsFromCal.forEach(event => eventsToConsiderForUpdate.push({ ...event, calendarId: calId }));
+          }
+        }
+      }
+
+      if (eventsToConsiderForUpdate.length === 0) {
+        toolResult = `I couldn't find any events in the specified time range to consider for updating. Could you please check if the event acxtually exists, or be more specific about when the event occurs?`;
+        break;
+      }
+
+      console.log(`[ChatController] Calling EventUpdaterLLM with ${eventsToConsiderForUpdate.length} events.`);
+
+      const eventJSONsToUpdate = await generateEventUpdateJSONs({
+        userInput: updateIntentParams.userInput,
+        userTimezone: userTimezone,
+        eventList: eventsToConsiderForUpdate,
+        targetCalendarIds: targetCalendarIdsForUpdate,
+        currentTimeISO: currentTimeISO,
+        timezoneInfo: params.timezoneInfo,
+      });
+
+      if (!eventJSONsToUpdate || eventJSONsToUpdate.length === 0) {
+        toolResult = `I found ${eventsToConsiderForUpdate.length} event(s) in the specified time range, but I couldn't confidently identify which specific event(s) you want to update based on your description ("${updateIntentParams.userInput}"). Could you please be more specific? I dont want to update the wrong events.`;
+        break;
+      }
+
+      const updateResults: string[] = [];
+      const successfullyUpdatedSummaries: string[] = [];
+      const failedToUpdateSummaries: string[] = [];
+      let allUpdateSucceeded = true;
+      let anyUpdateSucceeded = false;
+
+      for (const eventToUpdate of eventJSONsToUpdate) {
+        if (!eventToUpdate.eventId || !eventToUpdate.calendarId) {
+            console.warn("[ChatController] EventUpdaterLLM provided an item without eventId or calendarId:", eventToUpdate);
+            updateResults.push(`Skipped updating an event due to missing ID or calendar ID.`); 
+            failedToUpdateSummaries.push(eventToUpdate.summary || 'an event with missing details');
+            allUpdateSucceeded = false;
+            continue;
+        }
+
+        try {
+          if (!targetCalendarIdsForUpdate.includes(eventToUpdate.calendarId)) {
+            console.warn(`[ChatController] EventUpdaterLLM tried to update from a non-target calendar ${eventToUpdate.calendarId}. Skipping.`);
+            updateResults.push(`Skipped updating event as it was from an unexpected calendar.`); 
+            failedToUpdateSummaries.push(eventToUpdate.summary || eventToUpdate.eventId);
+            allUpdateSucceeded = false;
+            continue;
+          }
+
+          // Create update parameters for the existing UpdateEventTool
+          const updateToolParams: any = {
+            eventId: eventToUpdate.eventId,
+            calendarId: eventToUpdate.calendarId,
+          };
+
+          // Only include fields that are being updated
+          if (eventToUpdate.summary) updateToolParams.summary = eventToUpdate.summary;
+          if (eventToUpdate.description) updateToolParams.description = eventToUpdate.description;
+          if (eventToUpdate.location) updateToolParams.location = eventToUpdate.location;
+          if (eventToUpdate.start?.dateTime) updateToolParams.start = eventToUpdate.start.dateTime;
+          if (eventToUpdate.end?.dateTime) updateToolParams.end = eventToUpdate.end.dateTime;
+          if (eventToUpdate.attendees) updateToolParams.attendees = eventToUpdate.attendees;
+
+          const updateTool = new UpdateEventTool(clerkUserId, googleAccessToken);
+          const result = await updateTool.call(updateToolParams);
+          
+          if (result.includes('updated successfully')) {
+            updateResults.push(result);
+            successfullyUpdatedSummaries.push(eventToUpdate.summary || eventToUpdate.eventId);
+            anyUpdateSucceeded = true;
+          } else {
+            updateResults.push(result);
+            failedToUpdateSummaries.push(eventToUpdate.summary || eventToUpdate.eventId);
+            allUpdateSucceeded = false;
+          }
+        } catch (error) {
+          let errorMsg = `Error updating event ${eventToUpdate.summary || eventToUpdate.eventId} (ID: ${eventToUpdate.eventId}).`;
+          if (error instanceof Error) {
+            errorMsg += `: ${error.message}`;
+          }
+          console.error("[ChatController] Error calling UpdateEventTool:", error);
+          updateResults.push(errorMsg);
+          failedToUpdateSummaries.push(eventToUpdate.summary || eventToUpdate.eventId);
+          allUpdateSucceeded = false;
+        }
+      }
+
+      if (anyUpdateSucceeded && allUpdateSucceeded) {
+        if (successfullyUpdatedSummaries.length === 1) {
+          toolResult = `Great! I've updated '${successfullyUpdatedSummaries[0]}' for you.`;
+        } else {
+          toolResult = `Excellent! I've updated ${successfullyUpdatedSummaries.length} events: ${successfullyUpdatedSummaries.map(s => `'${s}'`).join(', ')}.`;
+        }
+      } else if (anyUpdateSucceeded && !allUpdateSucceeded) {
+        let response = `I was able to update: ${successfullyUpdatedSummaries.map(s => `'${s}'`).join(', ')}.`;
+        if (failedToUpdateSummaries.length > 0) {
+          response += ` However, I couldn't update: ${failedToUpdateSummaries.map(s => `'${s}'`).join(', ')}.`;
+        }
+        toolResult = response;
+      } else { 
+        toolResult = "I'm sorry, I wasn't able to update the requested event(s) at this time. Please ensure the event details are correct or try again.";
+      }
       break;
     case "delete_event":
       const deleteIntentParams = plan.params as DeleteEventIntentParams;
@@ -323,7 +665,8 @@ export async function executePlan(params: ChatControllerParams): Promise<Execute
         userTimezone: userTimezone,
         eventList: eventsToConsiderForDeletion,
         targetCalendarIds: targetCalendarIdsForDelete,
-        currentTimeISO: currentTimeISO
+        currentTimeISO: currentTimeISO,
+        timezoneInfo: params.timezoneInfo,
       });
 
       const userFriendlyCandidates = eventsToConsiderForDeletion.map(e => ({
